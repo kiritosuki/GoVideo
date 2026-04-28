@@ -1,0 +1,23 @@
+server:
+  port: 8080
+database:
+  host: localhost
+  port: 3306
+  user: root
+  password: 1234
+  dbname: go_video
+redis:
+  host: localhost
+  port: 6379
+  password:
+  db: 0
+rabbitmq:
+  host: localhost
+  port: 5672
+  username: guest
+  password: guest
+observability:
+  pprof:
+    enabled: true
+    api_addr: localhost:6060
+    worker_addr: localhost:6061
