@@ -43,7 +43,7 @@ type RabbitMQConfig struct {
 }
 
 type ObservabilityConfig struct {
-	Pprof PprofConfig
+	Pprof PprofConfig `yaml:"pprof"`
 }
 
 type PprofConfig struct {

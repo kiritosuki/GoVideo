@@ -116,10 +116,11 @@ func (c *Client) Unlock(ctx context.Context, key string, token string) error {
 }
 
 // IncrementWithExpr 用于对key做给定expr时间内的自增计数
-// 初次调用会开启过期时间 包括初次和之后每次调用会让计数器原子性+1
+// 初次调用会开启过期时间 计时器为1 之后每次调用会让计数器原子性+1
 func (c *Client) IncrementWithExpr(ctx context.Context, key string, expr time.Duration) (int64, error) {
 	if c == nil || c.rdb == nil {
 		return 0, nil
 	}
+	// 返回计数器次数
 	return incrementWithExprScript.Run(ctx, c.rdb, []string{key}, expr.Milliseconds()).Int64()
 }
