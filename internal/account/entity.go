@@ -9,3 +9,8 @@ type Account struct {
 	AvatarURL    string `gorm:"type:varchar(512)" json:"avatar_url,omitempty"`
 	Bio          string `gorm:"type:varchar(255)" json:"bio,omitempty"`
 }
+
+type CreateAccountRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}

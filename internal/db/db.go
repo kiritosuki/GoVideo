@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 
+	"github.com/kiritosuki/GoVideo/internal/account"
 	"github.com/kiritosuki/GoVideo/internal/config"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -22,7 +23,8 @@ func NewDB(dbConfig config.DatabaseConfig) (*gorm.DB, error) {
 // AutoMigrate 自动建表
 func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
-	// TODO 这里写数据结构
+		// TODO 这里写数据结构
+		&account.Account{},
 	)
 }
 

@@ -3,13 +3,16 @@ package ratelimit
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/kiritosuki/GoVideo/internal/middleware/jwt"
 	rediscache "github.com/kiritosuki/GoVideo/internal/middleware/redis"
 )
 
+// KeyFunc 获取key subject的函数
 type KeyFunc func(ctx *gin.Context) (string, bool)
 
 // TODO 限流机制 接着实现...
@@ -48,4 +51,22 @@ func buildKey(keyPrefix string, subject string) string {
 		keyPrefix = "default"
 	}
 	return fmt.Sprintf("govideo:ratelimit:%s:%s", keyPrefix, strings.TrimSpace(subject))
+}
+
+// KeyByIP 获取ip作为key subject
+func KeyByIP(c *gin.Context) (string, bool) {
+	ip := strings.TrimSpace(c.ClientIP())
+	if ip == "" {
+		return "", false
+	}
+	return ip, true
+}
+
+// KeyByAccount 获取accountID作为key subject
+func KeyByAccount(c *gin.Context) (string, bool) {
+	accountID, err := jwt.GetAccountID(c)
+	if err != nil || accountID == 0 {
+		return "", false
+	}
+	return strconv.FormatUint(uint64(accountID), 10), true
 }
