@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/kiritosuki/GoVideo/internal/account"
+	"github.com/kiritosuki/GoVideo/internal/middleware/jwt"
 	"github.com/kiritosuki/GoVideo/internal/middleware/ratelimit"
 	rediscache "github.com/kiritosuki/GoVideo/internal/middleware/redis"
 	"gorm.io/gorm"
@@ -39,6 +40,10 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client) *gin.Engine {
 	{
 		accountGroup.POST("/register", registerLimiter, accountHandler.CreateAccount)
 	}
-	
+	protectedAccountGroup := accountGroup.Group("")
+	protectedAccountGroup.Use(jwt.JWTAuth(accountRepo, cache))
+	{
+		protectedAccountGroup.POST("/rename", accountHandler.Rename)
+	}
 	return r
 }
