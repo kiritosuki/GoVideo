@@ -42,8 +42,8 @@ func (r *AccountRepo) FindByUsername(ctx context.Context, username string) (*Acc
 	return &account, nil
 }
 
-// Login 登录 根据accountID更新对应用户的token和refreshToken
-func (r *AccountRepo) Login(ctx context.Context, accountID uint, token string, refreshToken string) error {
+// UpdateTokenAndRefreshToken 登录 根据accountID更新对应用户的token和refreshToken
+func (r *AccountRepo) UpdateTokenAndRefreshToken(ctx context.Context, accountID uint, token string, refreshToken string) error {
 	err := r.db.WithContext(ctx).
 		Model(&Account{}).
 		Where("id = ?", accountID).
@@ -55,6 +55,32 @@ func (r *AccountRepo) Login(ctx context.Context, accountID uint, token string, r
 		return err
 	}
 	return nil
+}
+
+// UpdateToken 根据accountID更新用户token
+func (r *AccountRepo) UpdateToken(ctx context.Context, accountID uint, newToken string) error {
+	err := r.db.WithContext(ctx).Model(&Account{}).Where("id = ?", accountID).Update("token", newToken).Error
+	return err
+}
+
+// FindAll 查询所有用户信息
+func (r *AccountRepo) FindAll(ctx context.Context) ([]*Account, error) {
+	var accounts []*Account
+	err := r.db.WithContext(ctx).Find(&accounts).Error
+	if err != nil {
+		return nil, err
+	}
+	return accounts, nil
+}
+
+// FindByRefreshToken 根据refreshToken查询用户信息
+func (r *AccountRepo) FindByRefreshToken(ctx context.Context, refreshToken string) (*Account, error) {
+	var account Account
+	err := r.db.WithContext(ctx).Where("refresh_token = ?", refreshToken).First(&account).Error
+	if err != nil {
+		return nil, err
+	}
+	return &account, nil
 }
 
 // RenameWithToken 根据accountID更新用户名和token

@@ -40,6 +40,7 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client) *gin.Engine {
 	{
 		accountGroup.POST("/register", registerLimiter, accountHandler.CreateAccount)
 		accountGroup.POST("/login", loginLimiter, accountHandler.Login)
+		accountGroup.POST("/refresh", accountHandler.Refresh)
 	}
 	protectedAccountGroup := accountGroup.Group("")
 	protectedAccountGroup.Use(jwt.JWTAuth(accountRepo, cache))

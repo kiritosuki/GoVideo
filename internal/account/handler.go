@@ -60,6 +60,25 @@ func (h *AccountHandler) Login(c *gin.Context) {
 	})
 }
 
+// Refresh 替换旧token 续签身份 返回新token
+func (h *AccountHandler) Refresh(c *gin.Context) {
+	var req RefreshRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(apierror.ClassifyHttpStatus(err), gin.H{"error": err.Error()})
+		return
+	}
+	newToken, accountID, username, err := h.accountService.RefreshToken(c.Request.Context(), req.RefreshToken)
+	if err != nil {
+		c.JSON(apierror.ClassifyHttpStatus(err), gin.H{"error": "invalid refresh token"})
+		return
+	}
+	c.JSON(200, RefreshResponse{
+		Token:     newToken,
+		AccountID: accountID,
+		Username:  username,
+	})
+}
+
 // Rename 重设用户名
 func (h *AccountHandler) Rename(c *gin.Context) {
 	var req RenameRequest

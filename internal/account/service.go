@@ -78,16 +78,20 @@ func (s *AccountService) Login(ctx context.Context, username string, password st
 		return "", "", err
 	}
 	// 更新用户的token和refreshToken
-	if err := s.accountRepo.Login(ctx, account.ID, token, refreshToken); err != nil {
+	if err := s.accountRepo.UpdateTokenAndRefreshToken(ctx, account.ID, token, refreshToken); err != nil {
 		return "", "", err
 	}
 	//
 	if s.cache != nil {
 		cacheCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
 		defer cancel()
+		// 更新redis缓存的token
 		if err := s.cache.SetBytes(cacheCtx, s.cache.Key("account:%d", account.ID), []byte(token), 24*time.Hour); err != nil {
 			log.Printf("failed to set cache: %v", err)
 		}
+		// 更新redis缓存的refreshToken 两对kv
+		// accountID - refreshToken
+		// refreshToken - accountID
 		if err := s.cache.SetBytes(cacheCtx, s.cache.Key("account:%d:refresh", account.ID), []byte(refreshToken), 7*24*time.Hour); err != nil {
 			log.Printf("failed to set refresh cache: %v", err)
 		}
@@ -96,6 +100,87 @@ func (s *AccountService) Login(ctx context.Context, username string, password st
 		}
 	}
 	return token, refreshToken, nil
+}
+
+// RefreshToken 刷新token 生成新token替换旧token 续签身份
+// 续签token需要用refreshToken做身份验证
+// 返回 newToken accountID username error
+func (s *AccountService) RefreshToken(ctx context.Context, refreshToken string) (string, uint, string, error) {
+	if refreshToken == "" {
+		return "", 0, "", errors.New("refresh token is empty")
+	}
+	// 先根据refreshToken从redis缓存中查询accountID
+	if s.cache != nil {
+		cacheCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+		defer cancel()
+		bytes, err := s.cache.GetBytes(cacheCtx, s.cache.Key("refresh:%s", refreshToken))
+		if err == nil {
+			// 如果查到了
+			idStr := string(bytes)
+			id, err := strconv.ParseUint(idStr, 10, 64)
+			if err == nil {
+				// 根据id从数据库查询用户信息
+				account, err := s.FindByID(ctx, uint(id))
+				// 如果refreshToken合法
+				if err == nil && account != nil && account.RefreshToken == refreshToken {
+					// 生成新的token
+					newToken, err := auth.GenerateToken(account.ID, account.Username)
+					if err != nil {
+						return "", 0, "", err
+					}
+					// 更新数据库中的token
+					err = s.accountRepo.UpdateToken(ctx, account.ID, newToken)
+					if err != nil {
+						return "", 0, "", err
+					}
+					// 更新redis缓存中的token
+					err = s.cache.SetBytes(cacheCtx, s.cache.Key("account:%d", account.ID), []byte(newToken), 24*time.Hour)
+					if err != nil {
+						return "", 0, "", err
+					}
+					return newToken, account.ID, account.Username, nil
+				}
+			}
+		}
+	}
+	// 如果缓存未启用 根据refreshToken从数据库查询用户信息
+	account, err := s.FindByRefreshToken(ctx, refreshToken)
+	if err != nil {
+		return "", 0, "", err
+	}
+	if account == nil {
+		return "", 0, "", errors.New("invalid refresh token")
+	}
+	// 如果查到了 生成新的token
+	newToken, err := auth.GenerateToken(account.ID, account.Username)
+	if err != nil {
+		return "", 0, "", err
+	}
+	// 更新数据库中的token
+	err = s.accountRepo.UpdateToken(ctx, account.ID, newToken)
+	if err != nil {
+		return "", 0, "", err
+	}
+	return newToken, account.ID, account.Username, nil
+}
+
+// FindByID 根据id查询用户信息
+func (s *AccountService) FindByID(ctx context.Context, id uint) (*Account, error) {
+	account, err := s.accountRepo.FindByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return account, nil
+}
+
+// FindAll 查询所有用户信息
+func (s *AccountService) FindAll(ctx context.Context) ([]*Account, error) {
+	return s.accountRepo.FindAll(ctx)
+}
+
+// FindByRefreshToken 根据refreshToken查询用户信息
+func (s *AccountService) FindByRefreshToken(ctx context.Context, refreshToken string) (*Account, error) {
+	return s.accountRepo.FindByRefreshToken(ctx, refreshToken)
 }
 
 // Rename 重设用户名
