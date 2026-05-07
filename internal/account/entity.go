@@ -14,3 +14,7 @@ type CreateAccountRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
+
+type RenameRequest struct {
+	NewUsername string `json:"new_username"`
+}

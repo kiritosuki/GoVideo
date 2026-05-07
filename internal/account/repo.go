@@ -32,3 +32,20 @@ func (r *AccountRepo) CreateAccount(ctx context.Context, account *Account) error
 	}
 	return nil
 }
+
+// RenameWithToken 根据accountID更新用户名和token
+func (r *AccountRepo) RenameWithToken(ctx context.Context, accountID uint, newUsername string, token string) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		update := tx.Model(&Account{}).Where("id = ?", accountID).Update("username", newUsername)
+		if update.Error != nil {
+			return update.Error
+		}
+		if update.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		if err := tx.Model(&Account{}).Where("id = ?", accountID).Update("token", token).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+}
