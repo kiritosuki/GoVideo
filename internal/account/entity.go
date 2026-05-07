@@ -15,6 +15,18 @@ type CreateAccountRequest struct {
 	Password string `json:"password"`
 }
 
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type LoginResponse struct {
+	Token        string `json:"token"`
+	RefreshToken string `json:"refresh_token"`
+	AccountID    uint   `json:"account_id"`
+	Username     string `json:"username"`
+}
+
 type RenameRequest struct {
 	NewUsername string `json:"new_username"`
 }

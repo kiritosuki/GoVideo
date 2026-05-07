@@ -15,17 +15,24 @@ const (
 	JWTExpire = 15 * time.Minute
 )
 
+var randJWTSecret string
+
 // jwtSecret 从环境变量读取jwt签名密钥
 // 如果未读取到 则会生成随机的签名密钥(服务一旦重启 随机签名密钥则会失效)
 func jwtSecret() []byte {
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
-		b := make([]byte, 32)
-		if _, err := rand.Read(b); err != nil {
-			log.Printf("FATAL: cannot generate JWT secret: %v\n", err)
-			return []byte("fallback-unsafe-key-change-me")
+		if randJWTSecret != "" {
+			secret = randJWTSecret
+		} else {
+			b := make([]byte, 32)
+			if _, err := rand.Read(b); err != nil {
+				log.Printf("FATAL: cannot generate JWT secret: %v\n", err)
+				return []byte("fallback-unsafe-key-change-me")
+			}
+			secret = hex.EncodeToString(b)
+			randJWTSecret = secret
 		}
-		secret = hex.EncodeToString(b)
 		log.Printf("WARNING: JWT_SECRET not set, generated random key. All tokens invalid on restart.")
 	}
 	return []byte(secret)
@@ -56,8 +63,8 @@ func GenerateToken(accountID uint, username string) (string, error) {
 	return token.SignedString(jwtSecret())
 }
 
-// GenerateRefreshSecret 生成新的jwt签名密钥 随机字符串
-func GenerateRefreshSecret(accountID uint) (string, error) {
+// GenerateRefreshToken 生成refreshToken
+func GenerateRefreshToken(accountID uint) (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err

@@ -25,7 +25,7 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client) *gin.Engine {
 
 	// 获取限流函数
 	// 根据ip限流
-	//loginLimiter := ratelimit.Limit(cache, "account_login", 10, time.Minute, ratelimit.KeyByIP)    // 每分钟10次
+	loginLimiter := ratelimit.Limit(cache, "account_login", 10, time.Minute, ratelimit.KeyByIP)    // 每分钟10次
 	registerLimiter := ratelimit.Limit(cache, "account_register", 5, time.Hour, ratelimit.KeyByIP) // 每小时5次
 	// 根据账号限流
 	//likeLimiter := ratelimit.Limit(cache, "like_write", 30, time.Minute, ratelimit.KeyByAccount)       // 每分钟30次
@@ -39,6 +39,7 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client) *gin.Engine {
 	accountGroup := r.Group("/account")
 	{
 		accountGroup.POST("/register", registerLimiter, accountHandler.CreateAccount)
+		accountGroup.POST("/login", loginLimiter, accountHandler.Login)
 	}
 	protectedAccountGroup := accountGroup.Group("")
 	protectedAccountGroup.Use(jwt.JWTAuth(accountRepo, cache))

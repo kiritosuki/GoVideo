@@ -35,6 +35,31 @@ func (h *AccountHandler) CreateAccount(c *gin.Context) {
 	c.JSON(200, gin.H{"message": "account created"})
 }
 
+// Login 登录
+func (h *AccountHandler) Login(c *gin.Context) {
+	var req LoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(apierror.ClassifyHttpStatus(err), gin.H{"error": err.Error()})
+		return
+	}
+	account, err := h.accountService.FindByUsername(c.Request.Context(), req.Username)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	token, refreshToken, err := h.accountService.Login(c.Request.Context(), req.Username, req.Password)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, LoginResponse{
+		Token:        token,
+		RefreshToken: refreshToken,
+		AccountID:    account.ID,
+		Username:     account.Username,
+	})
+}
+
 // Rename 重设用户名
 func (h *AccountHandler) Rename(c *gin.Context) {
 	var req RenameRequest
