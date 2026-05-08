@@ -17,6 +17,7 @@ import (
 var (
 	ErrNewUsernameRequired = errors.New("new_username is required")
 	ErrUsernameTaken       = errors.New("username already exists")
+	ErrIncorrectPassword   = errors.New("incorrect password")
 )
 
 type AccountService struct {
@@ -77,7 +78,7 @@ func (s *AccountService) Login(ctx context.Context, username string, password st
 	if err != nil {
 		return "", "", err
 	}
-	// 更新用户的token和refreshToken
+	// 更新用户的token和refreshToken到数据库
 	if err := s.accountRepo.UpdateTokenAndRefreshToken(ctx, account.ID, token, refreshToken); err != nil {
 		return "", "", err
 	}
@@ -216,4 +217,68 @@ func (s *AccountService) Rename(ctx context.Context, accountID uint, newUsername
 		}
 	}
 	return token, nil
+}
+
+// ChangePassword 更改密码
+func (s *AccountService) ChangePassword(ctx context.Context, username string, oldPassword string, newPassword string) error {
+	// 根据username查询用户信息
+	account, err := s.FindByUsername(ctx, username)
+	if err != nil {
+		return err
+	}
+	// 比较旧密码是否正确
+	err = bcrypt.CompareHashAndPassword([]byte(account.Password), []byte(oldPassword))
+	if err != nil {
+		return ErrIncorrectPassword
+	}
+	// 更新密码
+	bytes, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	newHashPassword := string(bytes)
+	err = s.accountRepo.UpdatePassword(ctx, account.ID, newHashPassword)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// Logout 登出 同时删除token与refreshToken 包括缓存和数据库
+func (s *AccountService) Logout(ctx context.Context, accountID uint) error {
+	// 根据id查询用户信息
+	account, err := s.FindByID(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	// 用户token为空 表示用户处于未登录状态 直接返回
+	if account.Token == "" {
+		return nil
+	}
+	// 删除缓存中的token
+	if s.cache != nil {
+		cacheCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+		defer cancel()
+		// 删除缓存token
+		if err := s.cache.Delete(ctx, s.cache.Key("account:%d", accountID)); err != nil {
+			log.Printf("failed to delete token cache: %v\n", err)
+		}
+		// 删除缓存refreshToken
+		if err := s.cache.Delete(ctx, s.cache.Key("account:%d:refresh", accountID)); err != nil {
+			log.Printf("failed to delete refreshToken cache: %v\n", err)
+		}
+		if account.RefreshToken != "" {
+			err := s.cache.Delete(cacheCtx, s.cache.Key("refresh:%s", account.RefreshToken))
+			if err != nil {
+				log.Printf("failed to delete refresh-id cache: %v\n", err)
+			}
+		}
+	}
+	// 删除数据库中的token
+	return s.accountRepo.DeleteTokenAndRefreshToken(ctx, account.ID)
+}
+
+// UpdateAvatar 上传头像
+func (s *AccountService) UpdateAvatar(ctx context.Context, accountID uint, avatarURL string) error {
+	return s.accountRepo.UpdateAvatar(ctx, accountID, avatarURL)
 }

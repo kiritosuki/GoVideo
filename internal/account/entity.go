@@ -40,3 +40,17 @@ type RefreshResponse struct {
 type RenameRequest struct {
 	NewUsername string `json:"new_username"`
 }
+
+type ChangePasswordRequest struct {
+	Username    string `json:"username"`
+	OldPassword string `json:"old_password"`
+	NewPassword string `json:"new_password"`
+}
+
+type FindByIDRequest struct {
+	ID uint `json:"id"`
+}
+
+type FindByUsernameRequest struct {
+	Username string `json:"username"`
+}

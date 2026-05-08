@@ -33,6 +33,7 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client) *gin.Engine {
 	//socialLimiter := ratelimit.Limit(cache, "social_write", 20, time.Minute, ratelimit.KeyByAccount)   // 每分钟20次
 
 	// account 路由
+	// TODO /getProfile 用户主页(视频数/获赞/粉丝)
 	accountRepo := account.NewAccountRepo(db)
 	accountService := account.NewAccountService(accountRepo, cache)
 	accountHandler := account.NewAccountHandler(accountService)
@@ -41,11 +42,17 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client) *gin.Engine {
 		accountGroup.POST("/register", registerLimiter, accountHandler.CreateAccount)
 		accountGroup.POST("/login", loginLimiter, accountHandler.Login)
 		accountGroup.POST("/refresh", accountHandler.Refresh)
+		accountGroup.POST("/changePassword", accountHandler.ChangePassword)
+		accountGroup.POST("/findByID", accountHandler.FindByID)
+		accountGroup.POST("/findByUsername", accountHandler.FindByUsername)
 	}
 	protectedAccountGroup := accountGroup.Group("")
 	protectedAccountGroup.Use(jwt.JWTAuth(accountRepo, cache))
 	{
 		protectedAccountGroup.POST("/rename", accountHandler.Rename)
+		protectedAccountGroup.POST("/logout", accountHandler.Logout)
+		protectedAccountGroup.POST("/uploadAvatar", accountHandler.UploadAvatar)
 	}
+
 	return r
 }

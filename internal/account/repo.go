@@ -99,3 +99,34 @@ func (r *AccountRepo) RenameWithToken(ctx context.Context, accountID uint, newUs
 		return nil
 	})
 }
+
+// UpdatePassword 更新密码
+func (r *AccountRepo) UpdatePassword(ctx context.Context, accountID uint, newHashPassword string) error {
+	err := r.db.WithContext(ctx).Model(&Account{}).Where("id = ?", accountID).Update("password", newHashPassword).Error
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// DeleteTokenAndRefreshToken 根据id删除用户的token和refreshToken
+// 即更新为空字符串
+func (r *AccountRepo) DeleteTokenAndRefreshToken(ctx context.Context, accountID uint) error {
+	err := r.db.WithContext(ctx).Model(&Account{}).Where("id = ?", accountID).Updates(map[string]any{
+		"token":         "",
+		"refresh_token": "",
+	}).Error
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// UpdateAvatar 根据id更新avatar_url
+func (r *AccountRepo) UpdateAvatar(ctx context.Context, accountID uint, avatarURL string) error {
+	err := r.db.WithContext(ctx).Model(&Account{}).Where("id = ?", accountID).Update("avatar_url", avatarURL).Error
+	if err != nil {
+		return err
+	}
+	return nil
+}
