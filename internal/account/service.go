@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -281,4 +282,14 @@ func (s *AccountService) Logout(ctx context.Context, accountID uint) error {
 // UpdateAvatar 上传头像
 func (s *AccountService) UpdateAvatar(ctx context.Context, accountID uint, avatarURL string) error {
 	return s.accountRepo.UpdateAvatar(ctx, accountID, avatarURL)
+}
+
+// UpdateProfile 更新简介
+func (s *AccountService) UpdateProfile(ctx context.Context, accountID uint, avatarURL string, bio string) error {
+	if avatarURL == "" && bio == "" {
+		return errors.New("nothing to update")
+	}
+	avatarURL = strings.TrimSpace(avatarURL)
+	bio = strings.TrimSpace(bio)
+	return s.accountRepo.UpdateAvatarAndProfile(ctx, accountID, avatarURL, bio)
 }

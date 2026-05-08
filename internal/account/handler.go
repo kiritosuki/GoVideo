@@ -244,6 +244,27 @@ func (h *AccountHandler) UploadAvatar(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"avatar_url": avatarURL})
 }
 
+// UpdateProfile 更新简介 JWT鉴权
+func (h *AccountHandler) UpdateProfile(c *gin.Context) {
+	// 从上下文获取accountID
+	accountID, err := getAccountID(c)
+	if err != nil {
+		c.JSON(apierror.ClassifyHttpStatus(err), gin.H{"error": err.Error()})
+		return
+	}
+	var req UpdateProfileRequest
+	if err = c.ShouldBindJSON(&req); err != nil {
+		c.JSON(apierror.ClassifyHttpStatus(err), gin.H{"error": err.Error()})
+		return
+	}
+	// 根据accountID更新简介
+	if err = h.accountService.UpdateProfile(c.Request.Context(), accountID, req.AvatarURL, req.Bio); err != nil {
+		c.JSON(apierror.ClassifyHttpStatus(err), gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "profile updated successfully"})
+}
+
 /* 未导出函数 */
 // getAccountID 从上下文中获取用户ID
 func getAccountID(c *gin.Context) (uint, error) {

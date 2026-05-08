@@ -54,3 +54,8 @@ type FindByIDRequest struct {
 type FindByUsernameRequest struct {
 	Username string `json:"username"`
 }
+
+type UpdateProfileRequest struct {
+	AvatarURL string `json:"avatar_url"`
+	Bio       string `json:"bio"`
+}

@@ -130,3 +130,15 @@ func (r *AccountRepo) UpdateAvatar(ctx context.Context, accountID uint, avatarUR
 	}
 	return nil
 }
+
+// UpdateAvatarAndProfile 根据id更新头像url和简介
+func (r *AccountRepo) UpdateAvatarAndProfile(ctx context.Context, accountID uint, avatarURL string, bio string) error {
+	err := r.db.WithContext(ctx).Model(&Account{}).Where("id = ?", accountID).Updates(map[string]any{
+		"avatar_url": avatarURL,
+		"bio":        bio,
+	}).Error
+	if err != nil {
+		return err
+	}
+	return nil
+}

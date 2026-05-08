@@ -52,6 +52,7 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client) *gin.Engine {
 		protectedAccountGroup.POST("/rename", accountHandler.Rename)
 		protectedAccountGroup.POST("/logout", accountHandler.Logout)
 		protectedAccountGroup.POST("/uploadAvatar", accountHandler.UploadAvatar)
+		protectedAccountGroup.POST("/updateProfile", accountHandler.UpdateProfile)
 	}
 
 	return r
