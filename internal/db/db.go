@@ -3,7 +3,7 @@ package db
 import (
 	"fmt"
 
-	"github.com/kiritosuki/GoVideo/internal/account"
+	"github.com/kiritosuki/GoVideo/internal/api/account"
 	"github.com/kiritosuki/GoVideo/internal/config"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"

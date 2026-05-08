@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/kiritosuki/GoVideo/internal/account"
+	"github.com/kiritosuki/GoVideo/internal/api/account"
 	"github.com/kiritosuki/GoVideo/internal/middleware/jwt"
 	"github.com/kiritosuki/GoVideo/internal/middleware/ratelimit"
 	rediscache "github.com/kiritosuki/GoVideo/internal/middleware/redis"
