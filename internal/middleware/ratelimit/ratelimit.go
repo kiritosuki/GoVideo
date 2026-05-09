@@ -15,8 +15,6 @@ import (
 // KeyFunc 获取key subject的函数
 type KeyFunc func(ctx *gin.Context) (string, bool)
 
-// TODO 限流机制 接着实现...
-
 // Limit 限流函数
 // 如果函数中出现error则会跳过限流机制 防止限流故障导致系统崩溃
 func Limit(cache *rediscache.Client, keyPrefix string, maxRequests int64, window time.Duration, keyFunc KeyFunc) gin.HandlerFunc {

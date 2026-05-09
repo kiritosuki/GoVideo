@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	"github.com/kiritosuki/GoVideo/internal/api/account"
+	"github.com/kiritosuki/GoVideo/internal/api/tag"
+	"github.com/kiritosuki/GoVideo/internal/api/video"
 	"github.com/kiritosuki/GoVideo/internal/config"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -25,6 +27,10 @@ func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		// TODO 这里写数据结构
 		&account.Account{},
+		&video.Video{},
+		&video.OutboxMsg{},
+		&tag.Tag{},
+		&tag.VideoTag{},
 	)
 }
 

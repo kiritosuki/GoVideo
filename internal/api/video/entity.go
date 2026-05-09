@@ -14,3 +14,28 @@ type Video struct {
 	LikesCount  int64     `gorm:"column:likes_count;not null;default:0;index:idx_videos_likes_count_id,priority:1,sort:desc" json:"likes_count"`
 	Popularity  int64     `gorm:"column:popularity;not null;default:0;index:idx_videos_popularity_time_id,priority:1,sort:desc" json:"popularity"`
 }
+
+type OutboxMsg struct {
+	ID         uint      `gorm:"primaryKey"`
+	VideoID    uint      `gorm:"index"`
+	EventType  string    `gorm:"type:varchar(50)"`
+	CreateTime time.Time `gorm:"autoCreateTime"`
+	Status     string    `gorm:"type:varchar(50);index"`
+}
+
+type UploadVideoResponse struct {
+	URL     string `json:"url"`
+	PlayURL string `json:"play_url"`
+}
+
+type UploadCoverResponse struct {
+	URL      string `json:"url"`
+	CoverURL string `json:"cover_url"`
+}
+
+type PublishVideoRequest struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	PlayURL     string `json:"play_url"`
+	CoverURL    string `json:"cover_url"`
+}

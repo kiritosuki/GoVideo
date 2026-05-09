@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/kiritosuki/GoVideo/internal/api/account"
+	"github.com/kiritosuki/GoVideo/internal/api/video"
 	"github.com/kiritosuki/GoVideo/internal/middleware/jwt"
 	"github.com/kiritosuki/GoVideo/internal/middleware/ratelimit"
 	rediscache "github.com/kiritosuki/GoVideo/internal/middleware/redis"
@@ -53,6 +54,22 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client) *gin.Engine {
 		protectedAccountGroup.POST("/logout", accountHandler.Logout)
 		protectedAccountGroup.POST("/uploadAvatar", accountHandler.UploadAvatar)
 		protectedAccountGroup.POST("/updateProfile", accountHandler.UpdateProfile)
+	}
+
+	// video 路由
+	videoRepo := video.NewVideoRepo(db)
+	videoService := video.NewVideoService(videoRepo, cache)
+	videoHandler := video.NewVideoHandler(videoService)
+	videoGroup := r.Group("/video")
+	{
+
+	}
+	protectedVideoGroup := videoGroup.Group("")
+	protectedVideoGroup.Use(jwt.JWTAuth(accountRepo, cache))
+	{
+		protectedVideoGroup.POST("/uploadVideo", videoHandler.UploadVideo)
+		protectedVideoGroup.POST("/uploadCover", videoHandler.UploadCover)
+		protectedVideoGroup.POST("/publish", videoHandler.PublishVideo)
 	}
 
 	return r

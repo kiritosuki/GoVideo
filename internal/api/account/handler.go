@@ -1,10 +1,7 @@
 package account
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
-	"fmt"
 	"net/http"
 	"os"
 	"path"
@@ -14,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/kiritosuki/GoVideo/internal/apierror"
+	"github.com/kiritosuki/GoVideo/internal/util"
 	"gorm.io/gorm"
 )
 
@@ -218,7 +216,7 @@ func (h *AccountHandler) UploadAvatar(c *gin.Context) {
 		return
 	}
 	// 生成随机文件名
-	filename, err := randHex(16)
+	filename, err := util.RandHex(16)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -235,7 +233,7 @@ func (h *AccountHandler) UploadAvatar(c *gin.Context) {
 	urlPath := path.Join("/static", "avatars", strconv.FormatUint(uint64(accountID), 10), filename)
 	// 拼接url绝对路径
 	// http://example.com/static/avatars/account_id/xxx.jpg
-	avatarURL := buildAbsoluteURL(c, urlPath)
+	avatarURL := util.BuildAbsoluteURL(c, urlPath)
 	// 更新数据库中的avatar_url
 	if err = h.accountService.UpdateAvatar(c.Request.Context(), accountID, avatarURL); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -270,35 +268,11 @@ func (h *AccountHandler) UpdateProfile(c *gin.Context) {
 func getAccountID(c *gin.Context) (uint, error) {
 	value, ok := c.Get("accountID")
 	if !ok {
-		return 0, errors.New("accountID not found in context")
+		return 0, errors.New("accountID not found")
 	}
 	id, ok := value.(uint)
 	if !ok {
 		return 0, errors.New("accountID has invalid type")
 	}
 	return id, nil
-}
-
-// randHex 获取指定二进制位数的随机16进制字符串
-func randHex(n int) (string, error) {
-	bytes := make([]byte, n)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", fmt.Errorf("rand.Read: %w", err)
-	}
-	return hex.EncodeToString(bytes), nil
-}
-
-// buildAbsoluteURL 拼接绝对url请求路径
-func buildAbsoluteURL(c *gin.Context, urlPath string) string {
-	// 默认是http 有TLS则是https
-	scheme := "http"
-	if c.Request.TLS != nil {
-		scheme = "https"
-	}
-	// 如果用了代理 则检查请求头中的请求协议(一般会放代理之前的请求协议)
-	// 例如前端到nginx是https nginx到后端是http 于是nginx会在请求头中放X-Forwarded-Proto为https 便于gin识别
-	if xfp := c.GetHeader("X-Forwarded-Proto"); xfp != "" {
-		scheme = xfp
-	}
-	return fmt.Sprintf("%s://%s%s", scheme, c.Request.Host, urlPath)
 }
