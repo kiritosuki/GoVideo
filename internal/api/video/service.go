@@ -2,9 +2,11 @@ package video
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/kiritosuki/GoVideo/internal/api/tag"
 	rediscache "github.com/kiritosuki/GoVideo/internal/middleware/redis"
@@ -14,12 +16,14 @@ import (
 type VideoService struct {
 	videoRepo *VideoRepo
 	cache     *rediscache.Client
+	cacheTTL  time.Duration
 }
 
 func NewVideoService(videoRepo *VideoRepo, cache *rediscache.Client) *VideoService {
 	return &VideoService{
 		videoRepo: videoRepo,
 		cache:     cache,
+		cacheTTL:  5 * time.Minute,
 	}
 }
 
@@ -83,6 +87,105 @@ func (s *VideoService) Publish(ctx context.Context, video *Video) error {
 		return nil
 	})
 	return err
+}
+
+// ListByAuthorID 根据作者ID查询视频列表
+func (s *VideoService) ListByAuthorID(ctx context.Context, authorID uint) ([]Video, error) {
+	return s.videoRepo.ListByAuthorID(ctx, authorID)
+}
+
+// GetDetail 根据id获取视频详细信息
+func (s *VideoService) GetDetail(ctx context.Context, id uint) (*Video, error) {
+	// 从redis缓存中查询视频的函数
+	getCacheFunc := func() (*Video, bool) {
+		key := s.cache.Key("video:detail:id=%d", id)
+		cacheCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+		bytes, err := s.cache.GetBytes(cacheCtx, key)
+		cancel()
+		if err != nil {
+			return nil, false
+		}
+		var video Video
+		if err := json.Unmarshal(bytes, &video); err != nil {
+			return nil, false
+		}
+		return &video, true
+	}
+	// 添加redis缓存视频的函数
+	setCacheFunc := func(video *Video) {
+		key := s.cache.Key("video:detail:id=%d", id)
+		bytes, err := json.Marshal(video)
+		if err != nil {
+			return
+		}
+		cacheCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+		s.cache.SetBytes(cacheCtx, key, bytes, s.cacheTTL)
+		cancel()
+	}
+	// 若redis缓存启用了
+	if s.cache != nil {
+		// 先尝试从redis缓存中查询视频
+		cacheCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+		bytes, err := s.cache.GetBytes(cacheCtx, s.cache.Key("video:detail:id=%d", id))
+		cancel()
+		if err == nil {
+			// 若缓存存在
+			var cached Video
+			if err := json.Unmarshal(bytes, &cached); err == nil {
+				return &cached, nil
+			}
+		} else if rediscache.IsMiss(err) {
+			// 若缓存未命中 多协程竞争分布式锁
+			lockKey := s.cache.Key("lock:video:detail:id=%d", id)
+			lockCtx, lockCancel := context.WithTimeout(ctx, 50*time.Millisecond)
+			token, ok, err := s.cache.Lock(lockCtx, lockKey, 2*time.Second)
+			lockCancel()
+			if err == nil && ok {
+				// 如果抢到了锁 查询数据库并回写缓存
+				defer func() {
+					s.cache.Unlock(context.Background(), lockKey, token)
+				}()
+				// 先再次查询缓存 缓存未命中与抢到锁的时间窗口内 可能缓存已经被其他协程写入
+				if cached, ok := getCacheFunc(); ok {
+					return cached, nil
+				}
+				// 查询数据库
+				video, err := s.videoRepo.FindByID(ctx, id)
+				if err != nil {
+					return nil, err
+				}
+				// 回写缓存
+				setCacheFunc(video)
+				// 返回
+				return video, nil
+			} else {
+				// 如果没有抢到锁 反复查询缓存 等待其他协程写入缓存
+				for i := 0; i < 5; i++ {
+					select {
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					case <-time.After(20 * time.Millisecond):
+					}
+					// 每次隔20ms尝试查询一次缓存
+					if video, ok := getCacheFunc(); ok {
+						return video, nil
+					}
+				}
+				// 若20 * 5 = 100ms内没查询到缓存 则降级去数据库查询
+			}
+		} // 其他err即为redis宕机 正常查询数据库即可
+	}
+	// 查询数据库
+	video, err := s.videoRepo.FindByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	// 如果redis缓存启用了 回写缓存
+	if s.cache != nil {
+		setCacheFunc(video)
+	}
+	// 返回
+	return video, nil
 }
 
 /* 辅助函数 */

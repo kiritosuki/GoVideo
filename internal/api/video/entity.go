@@ -39,3 +39,11 @@ type PublishVideoRequest struct {
 	PlayURL     string `json:"play_url"`
 	CoverURL    string `json:"cover_url"`
 }
+
+type ListByAuthorIDRequest struct {
+	AuthorID uint `json:"author_id"`
+}
+
+type GetDetailRequest struct {
+	ID uint `json:"id"`
+}

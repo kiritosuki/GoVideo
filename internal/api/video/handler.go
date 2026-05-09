@@ -141,7 +141,7 @@ func (h *VideoHandler) UploadCover(c *gin.Context) {
 	})
 }
 
-// PublishVideo 发布视频
+// PublishVideo 发布视频 JWT鉴权
 func (h *VideoHandler) PublishVideo(c *gin.Context) {
 	var req PublishVideoRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -168,6 +168,39 @@ func (h *VideoHandler) PublishVideo(c *gin.Context) {
 		CreateTime:  time.Now(),
 	}
 	if err = h.videoService.Publish(c.Request.Context(), video); err != nil {
+		c.JSON(apierror.ClassifyHttpStatus(err), gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, video)
+}
+
+// ListByAuthorID 根据作者id获取作品列表
+func (h *VideoHandler) ListByAuthorID(c *gin.Context) {
+	var req ListByAuthorIDRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(apierror.ClassifyHttpStatus(err), gin.H{"error": err.Error()})
+		return
+	}
+	videos, err := h.videoService.ListByAuthorID(c.Request.Context(), req.AuthorID)
+	if err != nil {
+		c.JSON(apierror.ClassifyHttpStatus(err), gin.H{"error": err.Error()})
+		return
+	}
+	if videos == nil {
+		videos = []Video{}
+	}
+	c.JSON(200, videos)
+}
+
+// GetDetail 根据id获取视频详细信息
+func (h *VideoHandler) GetDetail(c *gin.Context) {
+	var req GetDetailRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(apierror.ClassifyHttpStatus(err), gin.H{"error": err.Error()})
+		return
+	}
+	video, err := h.videoService.GetDetail(c.Request.Context(), req.ID)
+	if err != nil {
 		c.JSON(apierror.ClassifyHttpStatus(err), gin.H{"error": err.Error()})
 		return
 	}

@@ -62,7 +62,8 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client) *gin.Engine {
 	videoHandler := video.NewVideoHandler(videoService)
 	videoGroup := r.Group("/video")
 	{
-
+		videoGroup.POST("/listByAuthorID", videoHandler.ListByAuthorID)
+		videoGroup.POST("/getDetail", videoHandler.GetDetail)
 	}
 	protectedVideoGroup := videoGroup.Group("")
 	protectedVideoGroup.Use(jwt.JWTAuth(accountRepo, cache))
