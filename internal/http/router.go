@@ -6,8 +6,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/kiritosuki/GoVideo/internal/api/account"
+	"github.com/kiritosuki/GoVideo/internal/api/like"
 	"github.com/kiritosuki/GoVideo/internal/api/video"
 	"github.com/kiritosuki/GoVideo/internal/middleware/jwt"
+	"github.com/kiritosuki/GoVideo/internal/middleware/rabbitmq"
 	"github.com/kiritosuki/GoVideo/internal/middleware/ratelimit"
 	rediscache "github.com/kiritosuki/GoVideo/internal/middleware/redis"
 	"gorm.io/gorm"
@@ -15,7 +17,7 @@ import (
 
 // SetRouter
 // TODO 参数后续需要加上MQ
-func SetRouter(db *gorm.DB, cache *rediscache.Client) *gin.Engine {
+func SetRouter(db *gorm.DB, cache *rediscache.Client, mq *rabbitmq.RabbitMQ) *gin.Engine {
 	r := gin.Default()
 	// 设置信任的ip 默认是信任所有ip
 	// 对于信任的ip: 从header中获取clientIP
@@ -71,6 +73,30 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client) *gin.Engine {
 		protectedVideoGroup.POST("/uploadVideo", videoHandler.UploadVideo)
 		protectedVideoGroup.POST("/uploadCover", videoHandler.UploadCover)
 		protectedVideoGroup.POST("/publish", videoHandler.PublishVideo)
+	}
+
+	// like 路由
+	likeRepo := like.NewLikeRepo(db)
+	likeMQ, err := rabbitmq.NewLikeMQ(mq)
+	if err != nil {
+		log.Printf("LikeMQ init failed (like_mq disabled): %v\n", err)
+		likeMQ = nil
+	}
+	popularityMQ, err := rabbitmq.NewPopularityMQ(mq)
+	if err != nil {
+		log.Printf("PopularityMQ init failed (popularity_mq disabled): %v\n", err)
+		popularityMQ = nil
+	}
+	likeService := like.NewLikeService(likeRepo, videoRepo, cache, likeMQ, popularityMQ)
+	likeHandler := like.NewLikeHandler(likeService)
+	likeGroup := r.Group("/like")
+	{
+
+	}
+	protectedLikeGroup := likeGroup.Group("")
+	protectedLikeGroup.Use(jwt.JWTAuth(accountRepo, cache))
+	{
+
 	}
 
 	return r

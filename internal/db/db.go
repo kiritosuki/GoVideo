@@ -13,6 +13,7 @@ import (
 
 // NewDB 创建数据库连接 返回gorm.DB对象 用于数据库相关操作
 func NewDB(dbConfig config.DatabaseConfig) (*gorm.DB, error) {
+	// dsn = user:password@tcp(host:port)/dbname?charset=utf8mb4&parseTime=True&loc=Local
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local",
 		dbConfig.User, dbConfig.Password, dbConfig.Host, dbConfig.Port, dbConfig.DBName)
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})

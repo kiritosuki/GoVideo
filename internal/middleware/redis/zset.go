@@ -8,7 +8,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// ZIncrBy 增加zset中某member的score
+// ZIncrBy 增加zset中某member的score zset不存在时自动创建
 func (c *Client) ZIncrBy(ctx context.Context, key string, member string, score float64) error {
 	if c == nil || c.rdb == nil {
 		return nil
