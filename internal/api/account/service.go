@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-sql-driver/mysql"
 	"github.com/kiritosuki/GoVideo/internal/auth"
 	rediscache "github.com/kiritosuki/GoVideo/internal/middleware/redis"
+	"github.com/kiritosuki/GoVideo/internal/util"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -198,9 +198,8 @@ func (s *AccountService) Rename(ctx context.Context, accountID uint, newUsername
 	}
 	// 重设用户名和token
 	if err = s.accountRepo.RenameWithToken(ctx, accountID, newUsername, token); err != nil {
-		var mysqlErr *mysql.MySQLError
-		// 1062: duplicate entry 用户名已被占用
-		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+		// 若用户名已被占用
+		if util.IsDupKey(err) {
 			return "", ErrUsernameTaken
 		}
 		// 未找到对应的用户

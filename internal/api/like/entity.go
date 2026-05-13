@@ -8,3 +8,15 @@ type Like struct {
 	AccountID uint      `gorm:"uniqueIndex:idx_likes_video_account,priority:2;not null" json:"account_id"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+type LikeRequest struct {
+	VideoID uint `json:"video_id"`
+}
+
+type UnLikeRequest struct {
+	VideoID uint `json:"video_id"`
+}
+
+type IsLikedRequest struct {
+	VideoID uint `json:"video_id"`
+}

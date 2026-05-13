@@ -2,6 +2,7 @@ package video
 
 import (
 	"context"
+	"errors"
 
 	"gorm.io/gorm"
 )
@@ -40,4 +41,17 @@ func (r *VideoRepo) FindByID(ctx context.Context, id uint) (*Video, error) {
 		return nil, err
 	}
 	return &video, nil
+}
+
+// IsExist 判断给定id的视频是否存在
+func (r *VideoRepo) IsExist(ctx context.Context, id uint) (bool, error) {
+	var video Video
+	if err := r.db.WithContext(ctx).
+		First(&video, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }

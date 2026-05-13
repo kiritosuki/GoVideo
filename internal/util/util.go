@@ -3,10 +3,12 @@ package util
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-sql-driver/mysql"
 )
 
 // RandHex 获取指定二进制位数的随机16进制字符串
@@ -34,4 +36,10 @@ func BuildAbsoluteURL(c *gin.Context, urlPath string) string {
 		scheme = strings.TrimSpace(parts[0])
 	}
 	return fmt.Sprintf("%s://%s%s", scheme, c.Request.Host, urlPath)
+}
+
+// IsDupKey 判断err错误是不是 Duplicate Key MySQLErr 类型
+func IsDupKey(err error) bool {
+	var me *mysql.MySQLError
+	return errors.As(err, &me) && me.Number == 1062
 }

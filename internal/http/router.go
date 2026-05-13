@@ -31,7 +31,7 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, mq *rabbitmq.RabbitMQ) *gi
 	loginLimiter := ratelimit.Limit(cache, "account_login", 10, time.Minute, ratelimit.KeyByIP)    // 每分钟10次
 	registerLimiter := ratelimit.Limit(cache, "account_register", 5, time.Hour, ratelimit.KeyByIP) // 每小时5次
 	// 根据账号限流
-	//likeLimiter := ratelimit.Limit(cache, "like_write", 30, time.Minute, ratelimit.KeyByAccount)       // 每分钟30次
+	likeLimiter := ratelimit.Limit(cache, "like_write", 30, time.Minute, ratelimit.KeyByAccount) // 每分钟30次
 	//commentLimiter := ratelimit.Limit(cache, "comment_write", 10, time.Minute, ratelimit.KeyByAccount) // 每分钟10次
 	//socialLimiter := ratelimit.Limit(cache, "social_write", 20, time.Minute, ratelimit.KeyByAccount)   // 每分钟20次
 
@@ -90,14 +90,13 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, mq *rabbitmq.RabbitMQ) *gi
 	likeService := like.NewLikeService(likeRepo, videoRepo, cache, likeMQ, popularityMQ)
 	likeHandler := like.NewLikeHandler(likeService)
 	likeGroup := r.Group("/like")
-	{
-
-	}
 	protectedLikeGroup := likeGroup.Group("")
 	protectedLikeGroup.Use(jwt.JWTAuth(accountRepo, cache))
 	{
-
+		protectedLikeGroup.POST("/like", likeLimiter, likeHandler.Like)
+		protectedLikeGroup.POST("/unlike", likeLimiter, likeHandler.Unlike)
+		protectedLikeGroup.POST("/isLiked", likeHandler.IsLiked)
+		protectedLikeGroup.POST("/listMyLikedVideos", likeHandler.ListMyLikedVideos)
 	}
-
 	return r
 }

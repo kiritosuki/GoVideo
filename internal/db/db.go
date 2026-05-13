@@ -4,6 +4,9 @@ import (
 	"fmt"
 
 	"github.com/kiritosuki/GoVideo/internal/api/account"
+	"github.com/kiritosuki/GoVideo/internal/api/comment"
+	"github.com/kiritosuki/GoVideo/internal/api/like"
+	"github.com/kiritosuki/GoVideo/internal/api/social"
 	"github.com/kiritosuki/GoVideo/internal/api/tag"
 	"github.com/kiritosuki/GoVideo/internal/api/video"
 	"github.com/kiritosuki/GoVideo/internal/config"
@@ -32,6 +35,9 @@ func AutoMigrate(db *gorm.DB) error {
 		&video.OutboxMsg{},
 		&tag.Tag{},
 		&tag.VideoTag{},
+		&like.Like{},
+		&comment.Comment{},
+		&social.Social{},
 	)
 }
 
