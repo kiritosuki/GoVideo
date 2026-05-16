@@ -6,7 +6,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/kiritosuki/GoVideo/internal/api/account"
+	"github.com/kiritosuki/GoVideo/internal/api/comment"
 	"github.com/kiritosuki/GoVideo/internal/api/like"
+	"github.com/kiritosuki/GoVideo/internal/api/social"
 	"github.com/kiritosuki/GoVideo/internal/api/video"
 	"github.com/kiritosuki/GoVideo/internal/middleware/jwt"
 	"github.com/kiritosuki/GoVideo/internal/middleware/rabbitmq"
@@ -98,5 +100,46 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, mq *rabbitmq.RabbitMQ) *gi
 		protectedLikeGroup.POST("/isLiked", likeHandler.IsLiked)
 		protectedLikeGroup.POST("/listMyLikedVideos", likeHandler.ListMyLikedVideos)
 	}
+
+	// comment路由
+	commentRepo := comment.NewCommentRepo(db)
+	commentMQ, err := rabbitmq.NewCommentMQ(mq)
+	if err != nil {
+		log.Printf("CommentMQ init failed (comment_mq disabled): %v\n", err)
+		commentMQ = nil
+	}
+	commentService := comment.NewCommentService(commentRepo, videoRepo, cache, commentMQ, popularityMQ)
+	commentHandler := comment.NewCommentHandler(commentService, accountService)
+	commentGroup := r.Group("/comment")
+	{
+		commentGroup.POST("/listAll", commentHandler.ListAllComments)
+	}
+	protectedCommentGroup := commentGroup.Group("")
+	protectedCommentGroup.Use(jwt.JWTAuth(accountRepo, cache))
+	{
+		protectedCommentGroup.POST("/publish", commentHandler.PublishComment)
+		protectedCommentGroup.POST("/delete", commentHandler.DeleteComment)
+	}
+
+	// social路由
+	socialRepo := social.NewSocialRepo(db)
+	socialMQ, err := rabbitmq.NewSocialMQ(mq)
+	if err != nil {
+		log.Printf("SocialMQ init failed (social_mq disabled): %v\n", err)
+		socialMQ = nil
+	}
+	socialService := social.NewSocialService(socialRepo, accountRepo, socialMQ)
+	socialHandler := social.NewSocialHandler(socialService)
+	socialGroup := r.Group("/social")
+	protectedSocialGroup := socialGroup.Group("")
+	protectedSocialGroup.Use(jwt.JWTAuth(accountRepo, cache))
+	{
+		protectedSocialGroup.POST("/follow", socialHandler.Follow)
+		protectedSocialGroup.POST("/unfollow", socialHandler.Unfollow)
+		protectedSocialGroup.POST("/listAllFollowers", socialHandler.ListAllFollowers)
+		protectedSocialGroup.POST("/listAllVloggers", socialHandler.ListAllVloggers)
+		protectedSocialGroup.POST("/getCounts", socialHandler.GetCounts)
+	}
+
 	return r
 }

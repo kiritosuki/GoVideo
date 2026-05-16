@@ -46,8 +46,8 @@ func (q *SocialMQ) Follow(ctx context.Context, followerID uint, vloggerID uint) 
 	return q.publish(ctx, "follow", SocialRoutingKeyFollow, followerID, vloggerID)
 }
 
-// UnFollow 向消息队列里发送取消关注消息
-func (q *SocialMQ) UnFollow(ctx context.Context, followerID uint, vloggerID uint) error {
+// Unfollow 向消息队列里发送取消关注消息
+func (q *SocialMQ) Unfollow(ctx context.Context, followerID uint, vloggerID uint) error {
 	return q.publish(ctx, "unfollow", SocialRoutingKeyUnFollow, followerID, vloggerID)
 }
 

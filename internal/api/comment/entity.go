@@ -10,3 +10,16 @@ type Comment struct {
 	Content   string    `gorm:"type:text" json:"content"`
 	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
 }
+
+type PublishCommentRequest struct {
+	VideoID uint   `json:"video_id"`
+	Content string `json:"content"`
+}
+
+type DeleteCommentRequest struct {
+	CommentID uint `json:"comment_id"`
+}
+
+type GetAllCommentsRequest struct {
+	VideoID uint `json:"video_id"`
+}
