@@ -17,7 +17,7 @@ func NewLikeHandler(likeService *LikeService) *LikeHandler {
 	}
 }
 
-// Like 给视频点赞
+// Like 给视频点赞 JWT鉴权
 func (h *LikeHandler) Like(c *gin.Context) {
 	var req LikeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -45,7 +45,7 @@ func (h *LikeHandler) Like(c *gin.Context) {
 	c.JSON(200, gin.H{"message": "like success"})
 }
 
-// Unlike 给视频取消点赞
+// Unlike 给视频取消点赞 JWT鉴权
 func (h *LikeHandler) Unlike(c *gin.Context) {
 	var req UnLikeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -73,7 +73,7 @@ func (h *LikeHandler) Unlike(c *gin.Context) {
 	c.JSON(200, gin.H{"message": "unlike success"})
 }
 
-// IsLiked 判断用户是否给视频点过赞
+// IsLiked 判断用户是否给视频点过赞 JWT鉴权
 func (h *LikeHandler) IsLiked(c *gin.Context) {
 	var req IsLikedRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -98,7 +98,7 @@ func (h *LikeHandler) IsLiked(c *gin.Context) {
 	c.JSON(200, gin.H{"is_liked": isLiked})
 }
 
-// ListMyLikedVideos 获取用户已赞的视频列表
+// ListMyLikedVideos 获取用户已赞的视频列表 JWT鉴权
 func (h *LikeHandler) ListMyLikedVideos(c *gin.Context) {
 	// 获取当前用户id
 	accountID, err := jwt.GetAccountID(c)

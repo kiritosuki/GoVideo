@@ -19,7 +19,7 @@ func NewSocialHandler(socialService *SocialService) *SocialHandler {
 	}
 }
 
-// Follow 关注
+// Follow 关注 JWT鉴权
 func (h *SocialHandler) Follow(c *gin.Context) {
 	var req FollowRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -47,7 +47,7 @@ func (h *SocialHandler) Follow(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "followed successfully"})
 }
 
-// Unfollow 取消关注
+// Unfollow 取消关注 JWT鉴权
 func (h *SocialHandler) Unfollow(c *gin.Context) {
 	var req UnfollowRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -75,7 +75,7 @@ func (h *SocialHandler) Unfollow(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "unfollowed successfully"})
 }
 
-// ListAllFollowers 列出所有粉丝
+// ListAllFollowers 列出所有粉丝 JWT鉴权
 func (h *SocialHandler) ListAllFollowers(c *gin.Context) {
 	var req ListAllFollowersRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -110,7 +110,7 @@ func (h *SocialHandler) ListAllFollowers(c *gin.Context) {
 	})
 }
 
-// ListAllVloggers 列出所有关注的人
+// ListAllVloggers 列出所有关注的人 JWT鉴权
 func (h *SocialHandler) ListAllVloggers(c *gin.Context) {
 	var req ListAllVloggersRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -145,7 +145,7 @@ func (h *SocialHandler) ListAllVloggers(c *gin.Context) {
 	})
 }
 
-// GetCounts 获取当前用户的关注数和粉丝数
+// GetCounts 获取当前用户的关注数和粉丝数 JWT鉴权
 func (h *SocialHandler) GetCounts(c *gin.Context) {
 	// 获取当前用户id
 	accountID, err := jwt.GetAccountID(c)

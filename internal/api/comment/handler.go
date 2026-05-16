@@ -19,7 +19,7 @@ func NewCommentHandler(commentService *CommentService, accountService *account.A
 	}
 }
 
-// PublishComment 发布评论
+// PublishComment 发布评论 JWT鉴权
 func (h *CommentHandler) PublishComment(c *gin.Context) {
 	var req PublishCommentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -58,7 +58,7 @@ func (h *CommentHandler) PublishComment(c *gin.Context) {
 	c.JSON(200, gin.H{"message": "comment published successfully"})
 }
 
-// DeleteComment 删除评论
+// DeleteComment 删除评论 JWT鉴权
 func (h *CommentHandler) DeleteComment(c *gin.Context) {
 	var req DeleteCommentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

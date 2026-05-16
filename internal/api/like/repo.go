@@ -45,3 +45,26 @@ func (r *LikeRepo) ListLikedVideos(ctx context.Context, accountID uint) ([]video
 	}
 	return videos, nil
 }
+
+// GetBatchLiked 批量判断accountID的用户是否点赞了[]videoIDs中的视频
+func (r *LikeRepo) GetBatchLiked(ctx context.Context, videoIDs []uint, accountID uint) (map[uint]bool, error) {
+	likedMap := make(map[uint]bool)
+	if len(videoIDs) == 0 {
+		return likedMap, nil
+	}
+	if accountID == 0 {
+		return likedMap, nil
+	}
+	var likes []Like
+	err := r.db.WithContext(ctx).
+		Model(&Like{}).
+		Where("video_id in ? and account_id = ?", videoIDs, accountID).
+		Find(&likes).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, like := range likes {
+		likedMap[like.VideoID] = true
+	}
+	return likedMap, nil
+}

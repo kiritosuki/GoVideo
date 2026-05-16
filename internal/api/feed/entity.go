@@ -16,3 +16,14 @@ type FeedVideoItem struct {
 	LikesCount  int64      `json:"likes_count"`
 	IsLiked     bool       `json:"is_liked"`
 }
+
+type ListLatestRequest struct {
+	Limit      int   `json:"limit"`
+	LatestTime int64 `json:"latest_time"`
+}
+
+type ListLatestResponse struct {
+	VideoList []FeedVideoItem `json:"video_list"`
+	NextTime  int64           `json:"next_time"`
+	HasMore   bool            `json:"has_more"`
+}

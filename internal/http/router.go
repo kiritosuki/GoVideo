@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/kiritosuki/GoVideo/internal/api/account"
 	"github.com/kiritosuki/GoVideo/internal/api/comment"
+	"github.com/kiritosuki/GoVideo/internal/api/feed"
 	"github.com/kiritosuki/GoVideo/internal/api/like"
 	"github.com/kiritosuki/GoVideo/internal/api/social"
 	"github.com/kiritosuki/GoVideo/internal/api/video"
@@ -140,6 +141,16 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, mq *rabbitmq.RabbitMQ) *gi
 		protectedSocialGroup.POST("/listAllVloggers", socialHandler.ListAllVloggers)
 		protectedSocialGroup.POST("/getCounts", socialHandler.GetCounts)
 	}
+
+	// feed路由
+	feedRepo := feed.NewFeedRepo(db)
+	feedService := feed.NewFeedService(feedRepo, likeRepo, cache)
+	feedHandler := feed.NewFeedHandler(feedService)
+	feedGroup := r.Group("/feed")
+	softFeedGroup := feedGroup.Group("")
+	softFeedGroup.Use(jwt.SoftJWTAuth(accountRepo, cache))
+	protectedFeedGroup := feedGroup.Group("")
+	protectedFeedGroup.Use(jwt.JWTAuth(accountRepo, cache))
 
 	return r
 }
