@@ -18,8 +18,8 @@ func NewFeedRepo(db *gorm.DB) *FeedRepo {
 	}
 }
 
-// ListLatest 查询在latestBefore时间点之前的依据create_time desc的前limit条视频
-// 如果latestBefore为时间零值 则对所有数据依据create_time desc取前limit条
+// ListLatest 根据latestBefore游标查询游标之后的视频
+// 如果latestBefore为时间零值 则对所有数据查询
 func (r *FeedRepo) ListLatest(ctx context.Context, limit int, latestBefore time.Time) ([]*video.Video, error) {
 	var videos []*video.Video
 	query := r.db.WithContext(ctx).
@@ -30,6 +30,33 @@ func (r *FeedRepo) ListLatest(ctx context.Context, limit int, latestBefore time.
 		query = query.Where("create_time < ?", latestBefore)
 	}
 	// 执行查询操作
+	if err := query.Limit(limit).Find(&videos).Error; err != nil {
+		return nil, err
+	}
+	return videos, nil
+}
+
+// GetByID 根据id查询视频
+func (r *FeedRepo) GetByID(ctx context.Context, id uint) (*video.Video, error) {
+	var v video.Video
+	if err := r.db.WithContext(ctx).
+		Where("id = ?", id).
+		First(&v).Error; err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+// ListLikesCount 根据LikesCountCursor(likesCount + id)游标查询游标之后的视频
+// 如果游标为nil 则对所有数据查询
+func (r *FeedRepo) ListLikesCount(ctx context.Context, limit int, cursor *LikesCountCursor) ([]*video.Video, error) {
+	var videos []*video.Video
+	query := r.db.WithContext(ctx).
+		Model(&video.Video{}).
+		Order("likes_count desc, id desc")
+	if cursor != nil {
+		query = query.Where("(likes_count < ?) or (likes_count = ? and id < ?)", cursor.LikesCount, cursor.LikesCount, cursor.ID)
+	}
 	if err := query.Limit(limit).Find(&videos).Error; err != nil {
 		return nil, err
 	}

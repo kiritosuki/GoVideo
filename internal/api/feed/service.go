@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/kiritosuki/GoVideo/internal/api/like"
@@ -35,7 +36,120 @@ func NewFeedService(feedRepo *FeedRepo, likeRepo *like.LikeRepo, redisCache *red
 	}
 }
 
-// ListLatest 获取最新的几条视频(LatestTime时间点之前)
+// GetVideosByIDs 根据 []videoIDs 获取 []video
+// 三级架构 L1_本地缓存 -> L2_redis -> L3_mysql
+func (s *FeedService) GetVideosByIDs(ctx context.Context, videoIDs []uint) ([]*video.Video, error) {
+	if len(videoIDs) == 0 {
+		return []*video.Video{}, nil
+	}
+	videoMap := make(map[uint]*video.Video)
+
+	// L1: 查询本地缓存
+	var missedL1 []uint
+	for _, id := range videoIDs {
+		// 获取本地视频缓存key
+		cacheKey := s.redisCache.Key("video:entity:%d", id)
+		if s.localCache != nil {
+			// 命中本地缓存 加入videoMap
+			if v, found := s.localCache.Get(cacheKey); found {
+				if data, ok := v.(video.Video); ok {
+					videoMap[id] = &data
+					continue
+				}
+			}
+		}
+		// 本地缓存未命中 记录id
+		missedL1 = append(missedL1, id)
+	}
+	if len(missedL1) == 0 {
+		// 本地缓存全部命中 直接返回
+		return buildOrderedResult(videoIDs, videoMap), nil
+	}
+
+	// L2: 查询redis缓存
+	var missedL2 []uint
+	if len(missedL1) > 0 {
+		cacheKeys := make([]string, len(missedL1))
+		for i, id := range missedL1 {
+			cacheKeys[i] = s.redisCache.Key("video:entity:%d", id)
+		}
+		cacheCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+		// 返回的结果len(results) == len(cacheKeys) 索引顺序对应
+		results, err := s.redisCache.MGet(cacheCtx, cacheKeys...)
+		cancel()
+		if err == nil {
+			for i, res := range results {
+				id := missedL1[i]
+				// 如果redis缓存命中
+				if res != nil {
+					if str, ok := res.(string); ok {
+						var v video.Video
+						if err := json.Unmarshal([]byte(str), &v); err == nil {
+							// 加入结果map
+							videoMap[id] = &v
+							// 回写更新 L1 本地缓存
+							if s.localCache != nil {
+								s.localCache.Set(cacheKeys[i], v, 5*time.Second)
+							}
+							continue
+						}
+					}
+				}
+				// 如果redis缓存未命中/类型断言失败/json反序列化失败 则记录id
+				missedL2 = append(missedL2, id)
+			}
+		} else {
+			// 如果redis查询出现err 认为redis故障(MGet批量操作查询到不存在不会返回err) 全部降级到L3
+			missedL2 = missedL1
+			log.Printf("L2 Redis MGet failed, all query to MySQL: %v\n", err)
+		}
+	}
+	if len(missedL2) == 0 {
+		return buildOrderedResult(videoIDs, videoMap), nil
+	}
+	// L3: 查询MySQL
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for _, id := range missedL2 {
+		wg.Add(1)
+		// 在for循环内部的协程中直接使用外面的id是危险操作 需要传入副本id参数
+		// 外面的id会随着for循环的不断进行而变化 影响到协程内的id 而协程何时被调度是不确定的
+		go func(videoID uint) {
+			defer wg.Done()
+			sfKey := s.redisCache.Key("sf:entity:%d", videoID)
+			v, err, _ := s.requestGroup.Do(sfKey, func() (interface{}, error) {
+				v, err := s.feedRepo.GetByID(ctx, videoID)
+				if err != nil || v == nil {
+					return nil, err
+				}
+				safeCopy := *v
+				cacheKey := s.redisCache.Key("video:entity:%d", v.ID)
+				if bytes, err := json.Marshal(safeCopy); err == nil {
+					// 查询到视频 则异步回写redis
+					go func(key string, b []byte) {
+						cacheCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+						defer cancel()
+						s.redisCache.SetBytes(cacheCtx, key, b, time.Hour)
+					}(cacheKey, bytes)
+				}
+				return v, err
+			})
+			// 如果成功查询到了 加入结果map
+			if err == nil && v != nil {
+				safeCopy := *(v.(*video.Video))
+				mu.Lock()
+				videoMap[videoID] = &safeCopy
+				mu.Unlock()
+				// 加入本地缓存
+				s.localCache.Set(s.redisCache.Key("video:entity:%d", safeCopy.ID), safeCopy, 5*time.Second)
+			}
+		}(id)
+	}
+	wg.Wait()
+	return buildOrderedResult(videoIDs, videoMap), nil
+}
+
+// ListLatest 获取最新的几条视频 游标为latestBefore
 func (s *FeedService) ListLatest(ctx context.Context, limit int, latestBefore time.Time, accountID uint) (ListLatestResponse, error) {
 	// 获取zset中score最低的一条数据 即create_time最旧的一条视频ID
 	zsetTail, err := s.redisCache.ZRangeWithScores(ctx, s.redisCache.Key("feed:global_timeline"), 0, 0)
@@ -173,79 +287,30 @@ func (s *FeedService) ListLatest(ctx context.Context, limit int, latestBefore ti
 	}, nil
 }
 
-// GetVideosByIDs 根据 []videoIDs 获取 []video
-// 三级架构 L1_本地缓存 -> L2_redis -> L3_mysql
-func (s *FeedService) GetVideosByIDs(ctx context.Context, videoIDs []uint) ([]*video.Video, error) {
-	if len(videoIDs) == 0 {
-		return []*video.Video{}, nil
+// ListLikesCount 获取点赞数最多的前几条视频 游标为LikesCountCursor(likesCount + id)
+func (s *FeedService) ListLikesCount(ctx context.Context, limit int, cursor *LikesCountCursor, accountID uint) (ListLikesCountResponse, error) {
+	videos, err := s.feedRepo.ListLikesCount(ctx, limit, cursor)
+	if err != nil {
+		return ListLikesCountResponse{}, err
 	}
-	videoMap := make(map[uint]*video.Video)
-
-	// L1: 查询本地缓存
-	var missedL1 []uint
-	for _, id := range videoIDs {
-		// 获取本地视频缓存key
-		cacheKey := s.redisCache.Key("video:entity:%d", id)
-		if s.localCache != nil {
-			// 命中本地缓存 加入videoMap
-			if v, found := s.localCache.Get(cacheKey); found {
-				if data, ok := v.(video.Video); ok {
-					videoMap[id] = &data
-					continue
-				}
-			}
-		}
-		// 本地缓存未命中 记录id
-		missedL1 = append(missedL1, id)
+	// 返回false表示一定没有更多内容了 返回true表示大概率有下一页(但也可能刚好查完了)
+	hasMore := len(videos) == limit
+	feedVideoItems, err := s.buildFeedVideos(ctx, videos, accountID)
+	if err != nil {
+		return ListLikesCountResponse{}, err
 	}
-	if len(missedL1) == 0 {
-		// 本地缓存全部命中 直接返回
-		return buildOrderedResult(videoIDs, videoMap), nil
+	res := ListLikesCountResponse{
+		VideoList: feedVideoItems,
+		HasMore:   hasMore,
 	}
-
-	// L2: 查询redis缓存
-	var missedL2 []uint
-	if len(missedL1) > 0 {
-		cacheKeys := make([]string, len(missedL1))
-		for i, id := range missedL1 {
-			cacheKeys[i] = s.redisCache.Key("video:entity:%d", id)
-		}
-		cacheCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
-		// 返回的结果len(results) == len(cacheKeys) 索引顺序对应
-		results, err := s.redisCache.MGet(cacheCtx, cacheKeys...)
-		cancel()
-		if err == nil {
-			for i, res := range results {
-				id := missedL1[i]
-				// 如果redis缓存命中
-				if res != nil {
-					if str, ok := res.(string); ok {
-						var v video.Video
-						if err := json.Unmarshal([]byte(str), &v); err == nil {
-							// 加入结果map
-							videoMap[id] = &v
-							// 回写更新 L1 本地缓存
-							if s.localCache != nil {
-								s.localCache.Set(cacheKeys[i], v, 5*time.Second)
-							}
-							continue
-						}
-					}
-				}
-				// 如果redis缓存未命中/类型断言失败/json反序列化失败 则记录id
-				missedL2 = append(missedL2, id)
-			}
-		} else {
-			// 如果redis查询出现err 认为redis故障(MGet批量操作查询到不存在不会返回err) 全部降级到L3
-			missedL2 = missedL1
-			log.Printf("L2 Redis MGet failed, all query to MySQL: %v\n", err)
-		}
+	if len(videos) > 0 {
+		lastVideo := videos[len(videos)-1]
+		nextID := lastVideo.ID
+		nextLikesCount := lastVideo.LikesCount
+		res.NextIDBefore = &nextID
+		res.NextLikesCountBefore = &nextLikesCount
 	}
-	if len(missedL2) == 0 {
-		return buildOrderedResult(videoIDs, videoMap), nil
-	}
-	// TODO L3: 查询MySQL
-	
+	return res, nil
 }
 
 /* 辅助函数 */
