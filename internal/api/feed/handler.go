@@ -1,6 +1,7 @@
 package feed
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -107,7 +108,7 @@ func (h *FeedHandler) ListLikesCount(c *gin.Context) {
 	c.JSON(200, feedItems)
 }
 
-// ListByPopularity 获取popularity最高的前几条视频 软鉴权
+// ListByPopularity 获取最热门的几条视频 软鉴权
 func (h *FeedHandler) ListByPopularity(c *gin.Context) {
 	var req ListByPopularityRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -160,6 +161,36 @@ func (h *FeedHandler) ListByPopularity(c *gin.Context) {
 	}
 	resp.VideoList = nonNilFeedVideoItems(resp.VideoList)
 	c.JSON(200, resp)
+}
+
+// ListByFollowing 获取关注的人的最新视频 JWT鉴权
+func (f *FeedHandler) ListByFollowing(c *gin.Context) {
+	var req ListByFollowingRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(apierror.ClassifyHttpStatus(err), gin.H{"error": err.Error()})
+		return
+	}
+	// 每次返回视频的数量限制为 [0, 50] 默认每次返回10条
+	if req.Limit <= 0 || req.Limit > 50 {
+		req.Limit = 10
+	}
+	// 获取用户id
+	accountID, err := jwt.GetAccountID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+	var latestTime time.Time
+	if req.LatestTime > 0 {
+		latestTime = time.Unix(req.LatestTime, 0)
+	}
+	feedItems, err := f.feedService.ListByFollowing(c.Request.Context(), req.Limit, latestTime, accountID)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	feedItems.VideoList = nonNilFeedVideoItems(feedItems.VideoList)
+	c.JSON(200, feedItems)
 }
 
 /* 辅助函数 */

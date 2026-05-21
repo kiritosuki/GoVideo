@@ -313,6 +313,233 @@ func (s *FeedService) ListLikesCount(ctx context.Context, limit int, cursor *Lik
 	return res, nil
 }
 
+// ListByPopularity 获取最热门的前几条视频 分钟级热榜合并 分页查询
+func (s *FeedService) ListByPopularity(ctx context.Context, limit int, reqAsOf int64, offset int, accountID uint, latestPopularity int64, latestBefore time.Time, latestIDBefore uint) (ListByPopularityResponse, error) {
+	// 如果运行了redis
+	if s.redisCache != nil {
+		// 从参数获取AsOf时间 精度截止到分钟 参数为0值则设置为当前时间
+		asOf := time.Now().UTC().Truncate(time.Minute)
+		if reqAsOf > 0 {
+			asOf = time.Unix(reqAsOf, 0).UTC().Truncate(time.Minute)
+		}
+		// 窗口大小为60min
+		const win = 60
+		keys := make([]string, 0, win)
+		for i := 0; i < win; i++ {
+			// 从asOf时间节点开始 获取过去一小时里的分钟级热度窗口的key
+			keys = append(keys, s.redisCache.Key("hot:video:1m:%s", asOf.Add(-time.Duration(i)*time.Minute).Format("200601021504")))
+		}
+		// 合并后的小时级热度窗口的key
+		dest := s.redisCache.Key("hot:video:merge:1m:%s", asOf.Format("200601021504"))
+		opCtx, cancel := context.WithTimeout(ctx, 80*time.Millisecond)
+		defer cancel()
+		// 判断小时级热度窗口缓存是否存在
+		exists, _ := s.redisCache.Exists(opCtx, dest)
+		if !exists {
+			// 不存在则创建 对这60个分钟级热度缓存取并集 过期时间为2min
+			s.redisCache.ZUnionStore(opCtx, dest, keys, "SUM")
+			s.redisCache.Expire(opCtx, dest, 2*time.Minute)
+		}
+		// 页起始与结束索引
+		start := int64(offset)
+		stop := start + int64(limit) - 1
+		// 查询members
+		members, err := s.redisCache.ZRevRange(opCtx, dest, start, stop)
+		if err == nil && len(members) == 0 {
+			// 如果查询的起始索引大于0但没有数据 说明查完了
+			if offset > 0 {
+				return ListByPopularityResponse{
+					VideoList:  []FeedVideoItem{},
+					AsOf:       asOf.Unix(),
+					NextOffset: offset,
+					HasMore:    false,
+				}, nil
+			}
+		}
+		// 如果正常查询到了结果(member为视频id)
+		if err == nil && len(members) > 0 {
+			ids := make([]uint, 0, len(members))
+			// 收集到ids
+			for _, m := range members {
+				id, err := strconv.ParseUint(m, 10, 64)
+				if err == nil && id > 0 {
+					ids = append(ids, uint(id))
+				}
+			}
+			// 根据ids查询videos
+			videos, err := s.feedRepo.GetByIDs(ctx, ids)
+			if err == nil {
+				// 把videos按照ids的顺序排序存入[]ordered
+				vMap := make(map[uint]*video.Video, len(videos))
+				for _, v := range videos {
+					vMap[v.ID] = v
+				}
+				ordered := make([]*video.Video, 0, len(ids))
+				for _, i := range ids {
+					if v := vMap[i]; v != nil {
+						ordered = append(ordered, v)
+					}
+				}
+				// 构建返回对象
+				items, err := s.buildFeedVideos(ctx, ordered, accountID)
+				if err != nil {
+					return ListByPopularityResponse{}, err
+				}
+				resp := ListByPopularityResponse{
+					VideoList:  items,
+					AsOf:       asOf.Unix(),
+					NextOffset: offset + len(items),
+					HasMore:    len(items) == limit,
+				}
+				if len(ordered) > 0 {
+					last := ordered[len(ordered)-1]
+					nextPopularity := last.Popularity
+					nextBefore := last.CreateTime
+					nextID := last.ID
+					resp.NextLatestPopularity = &nextPopularity
+					resp.NextLatestBefore = &nextBefore
+					resp.NextLatestIDBefore = &nextID
+				}
+				return resp, nil
+			}
+		}
+	}
+	// 如果redis故障 降级查数据库
+	videos, err := s.feedRepo.ListByPopularity(ctx, limit, latestPopularity, latestBefore, latestIDBefore)
+	if err != nil {
+		return ListByPopularityResponse{}, err
+	}
+	items, err := s.buildFeedVideos(ctx, videos, accountID)
+	if err != nil {
+		return ListByPopularityResponse{}, err
+	}
+	// AsOf和NextOffset返回0 使下次请求能先尝试redis并刷新时间
+	// 如果redis宕机修复 此机制可以自愈
+	resp := ListByPopularityResponse{
+		VideoList:  items,
+		AsOf:       0,
+		NextOffset: 0,
+		HasMore:    len(items) == limit,
+	}
+	// redis可能仍宕机 需要用传下次查询mysql的游标
+	if len(videos) > 0 {
+		last := videos[len(videos)-1]
+		nextPopularity := last.Popularity
+		nextBefore := last.CreateTime
+		nextID := last.ID
+		resp.NextLatestPopularity = &nextPopularity
+		resp.NextLatestBefore = &nextBefore
+		resp.NextLatestIDBefore = &nextID
+	}
+	return resp, nil
+}
+
+// ListByFollowing 获取关注的人的最新视频 以latestBefore作为游标
+func (s *FeedService) ListByFollowing(ctx context.Context, limit int, latestBefore time.Time, accountID uint) (ListByFollowingResponse, error) {
+	// 用于查询数据库的函数
+	doListByFollowingFromDB := func() (ListByFollowingResponse, error) {
+		// 查询关注的人的最新视频
+		videos, err := s.feedRepo.ListByFollowing(ctx, limit, accountID, latestBefore)
+		if err != nil {
+			return ListByFollowingResponse{}, err
+		}
+		var nextTime int64
+		if len(videos) > 0 {
+			nextTime = videos[len(videos)-1].CreateTime.Unix()
+		} else {
+			nextTime = 0
+		}
+		hasMore := len(videos) == limit
+		feedVideos, err := s.buildFeedVideos(ctx, videos, accountID)
+		if err != nil {
+			return ListByFollowingResponse{}, err
+		}
+		resp := ListByFollowingResponse{
+			VideoList: feedVideos,
+			NextTime:  nextTime,
+			HasMore:   hasMore,
+		}
+		return resp, nil
+	}
+
+	var cacheKey string
+	// 如果redis缓存运行且用户登录
+	if accountID != 0 && s.redisCache != nil {
+		before := int64(0)
+		if !latestBefore.IsZero() {
+			before = latestBefore.Unix()
+		}
+		cacheKey = s.redisCache.Key("feed:listByFollowing:limit=%d:accountID=%d:before=%d", limit, accountID, before)
+		cacheCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+		defer cancel()
+		// 查询缓存
+		bytes, err := s.redisCache.GetBytes(cacheCtx, cacheKey)
+		if err == nil {
+			var cached ListByFollowingResponse
+			if err := json.Unmarshal(bytes, &cached); err == nil {
+				// 缓存存在 直接返回
+				return cached, nil
+			}
+		} else if rediscache.IsMiss(err) {
+			// 缓存未命中
+			// 获取分布式锁
+			lockKey := "lock:" + cacheKey
+			token, locked, _ := s.redisCache.Lock(cacheCtx, lockKey, 500*time.Millisecond)
+			if locked {
+				defer func() {
+					s.redisCache.Unlock(context.Background(), lockKey, token)
+				}()
+				// 先再次检查缓存 缓存未命中和抢到锁的时间窗口内 可能缓存已经被其他协程写入
+				if b, err := s.redisCache.GetBytes(cacheCtx, cacheKey); err == nil {
+					var cached ListByFollowingResponse
+					if err := json.Unmarshal(b, &cached); err == nil {
+						return cached, nil
+					}
+				} else {
+					// 查询数据库
+					resp, err := doListByFollowingFromDB()
+					if err != nil {
+						return ListByFollowingResponse{}, err
+					}
+					// 回写缓存
+					if b, err := json.Marshal(resp); err == nil {
+						s.redisCache.SetBytes(cacheCtx, cacheKey, b, s.cacheTTL)
+					}
+					// 返回结果
+					return resp, nil
+				}
+			} else {
+				// 如果没竞争到锁 等待持有锁线程回写缓存
+				for i := 0; i < 5; i++ {
+					// 只试五次 超时降级查询mysql
+					time.Sleep(20 * time.Millisecond)
+					if b, err := s.redisCache.GetBytes(cacheCtx, cacheKey); err == nil {
+						var cached ListByFollowingResponse
+						if err := json.Unmarshal(b, &cached); err == nil {
+							return cached, nil
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 如果redis故障或者查询redis超时/出错 降级查询mysql
+	resp, err := doListByFollowingFromDB()
+	if err != nil {
+		return ListByFollowingResponse{}, err
+	}
+	if cacheKey != "" {
+		// 回写redis缓存
+		if b, err := json.Marshal(resp); err == nil {
+			cacheCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+			defer cancel()
+			s.redisCache.SetBytes(cacheCtx, cacheKey, b, s.cacheTTL)
+		}
+	}
+	return resp, nil
+}
+
 /* 辅助函数 */
 
 // buildFeedVideos 根据[]video构造[]FeedVideoItem
