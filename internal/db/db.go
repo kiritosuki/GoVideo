@@ -6,10 +6,12 @@ import (
 	"github.com/kiritosuki/GoVideo/internal/api/account"
 	"github.com/kiritosuki/GoVideo/internal/api/comment"
 	"github.com/kiritosuki/GoVideo/internal/api/like"
+	"github.com/kiritosuki/GoVideo/internal/api/message"
 	"github.com/kiritosuki/GoVideo/internal/api/social"
 	"github.com/kiritosuki/GoVideo/internal/api/tag"
 	"github.com/kiritosuki/GoVideo/internal/api/video"
 	"github.com/kiritosuki/GoVideo/internal/config"
+	"github.com/kiritosuki/GoVideo/internal/worker"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
@@ -38,6 +40,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&like.Like{},
 		&comment.Comment{},
 		&social.Social{},
+		&message.Message{},
+		&worker.Notification{},
 	)
 }
 

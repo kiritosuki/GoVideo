@@ -7,12 +7,11 @@ import (
 )
 
 const (
-	DLXExchange   = "dlx.events"
-	MaxRetryCount = 3
+	DLXExchange = "dlx.events"
 )
 
 // DeclareDLX 声明死信交换机和对应的死信队列
-func DeclareDLX(ch *amqp.Channel, queueName string) error {
+func DeclareDLX(ch *amqp.Channel, queueName string, bindingKey string) error {
 	if ch == nil {
 		return nil
 	}
@@ -44,7 +43,7 @@ func DeclareDLX(ch *amqp.Channel, queueName string) error {
 	// 绑定queue和exchange
 	if err := ch.QueueBind(
 		q.Name,
-		"#", // 绑定所有key
+		bindingKey,
 		DLXExchange,
 		false,
 		nil,
@@ -56,18 +55,18 @@ func DeclareDLX(ch *amqp.Channel, queueName string) error {
 }
 
 // GetRetryCount 从 amqp x-death header 中提取当前消息已被重试的次数
-func GetRetryCount(d amqp.Delivery) int {
-	deaths, ok := d.Headers["x-death"].([]any)
-	if !ok || len(deaths) == 0 {
-		return 0
-	}
-	death, ok := deaths[0].(amqp.Table)
-	if !ok {
-		return 0
-	}
-	count, ok := death["count"].(int64)
-	if !ok {
-		return 0
-	}
-	return int(count)
-}
+//func GetRetryCount(d amqp.Delivery) int {
+//	deaths, ok := d.Headers["x-death"].([]any)
+//	if !ok || len(deaths) == 0 {
+//		return 0
+//	}
+//	death, ok := deaths[0].(amqp.Table)
+//	if !ok {
+//		return 0
+//	}
+//	count, ok := death["count"].(int64)
+//	if !ok {
+//		return 0
+//	}
+//	return int(count)
+//}

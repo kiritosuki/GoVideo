@@ -9,6 +9,7 @@ import (
 	"github.com/kiritosuki/GoVideo/internal/api/comment"
 	"github.com/kiritosuki/GoVideo/internal/api/feed"
 	"github.com/kiritosuki/GoVideo/internal/api/like"
+	"github.com/kiritosuki/GoVideo/internal/api/message"
 	"github.com/kiritosuki/GoVideo/internal/api/social"
 	"github.com/kiritosuki/GoVideo/internal/api/video"
 	"github.com/kiritosuki/GoVideo/internal/middleware/jwt"
@@ -147,10 +148,31 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, mq *rabbitmq.RabbitMQ) *gi
 	feedService := feed.NewFeedService(feedRepo, likeRepo, cache)
 	feedHandler := feed.NewFeedHandler(feedService)
 	feedGroup := r.Group("/feed")
-	softFeedGroup := feedGroup.Group("")
-	softFeedGroup.Use(jwt.SoftJWTAuth(accountRepo, cache))
 	protectedFeedGroup := feedGroup.Group("")
 	protectedFeedGroup.Use(jwt.JWTAuth(accountRepo, cache))
+	{
+		protectedFeedGroup.POST("/listByFollowing", feedHandler.ListByFollowing)
+	}
+	softFeedGroup := feedGroup.Group("")
+	softFeedGroup.Use(jwt.SoftJWTAuth(accountRepo, cache))
+	{
+		softFeedGroup.POST("/listLatest", feedHandler.ListLatest)
+		softFeedGroup.POST("listLikesCount", feedHandler.ListLikesCount)
+		softFeedGroup.POST("listByPopularity", feedHandler.ListByPopularity)
+		softFeedGroup.POST("listByTag", feedHandler.ListByTag)
+	}
+
+	// message路由
+	messageRepo := message.NewMessageRepo(db)
+	messageService := message.NewMessageService(messageRepo)
+	messageHandler := message.NewMessageHandler(messageService)
+	messageGroup := r.Group("/message")
+	protectedMessageGroup := messageGroup.Group("")
+	protectedMessageGroup.Use(jwt.JWTAuth(accountRepo, cache))
+	{
+		protectedMessageGroup.POST("/send", messageHandler.Send)
+		protectedMessageGroup.POST("list", messageHandler.List)
+	}
 
 	return r
 }

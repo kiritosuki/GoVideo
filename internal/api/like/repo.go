@@ -2,7 +2,9 @@ package like
 
 import (
 	"context"
+	"errors"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/kiritosuki/GoVideo/internal/api/video"
 	"gorm.io/gorm"
 )
@@ -67,4 +69,21 @@ func (r *LikeRepo) GetBatchLiked(ctx context.Context, videoIDs []uint, accountID
 		likedMap[like.VideoID] = true
 	}
 	return likedMap, nil
+}
+
+// LikeIgnoreDuplicate 给视频点赞 但如果重复点赞不返回错误 只返回false
+func (r *LikeRepo) LikeIgnoreDuplicate(ctx context.Context, l *Like) (bool, error) {
+	if l == nil || l.VideoID == 0 || l.AccountID == 0 {
+		return false, nil
+	}
+	err := r.db.WithContext(ctx).Create(l).Error
+	if err == nil {
+		return true, nil
+	}
+	var mysqlErr *mysql.MySQLError
+	// 如果是duplicate错误
+	if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+		return false, nil
+	}
+	return false, err
 }

@@ -540,6 +540,15 @@ func (s *FeedService) ListByFollowing(ctx context.Context, limit int, latestBefo
 	return resp, nil
 }
 
+// ListByTag 根据标签名称查询视频 按照创建时间降序返回
+func (s *FeedService) ListByTag(ctx context.Context, tagName string, limit int, accountID uint) ([]FeedVideoItem, error) {
+	videos, err := s.feedRepo.ListByTag(ctx, tagName, limit)
+	if err != nil {
+		return nil, err
+	}
+	return s.buildFeedVideos(ctx, videos, accountID)
+}
+
 /* 辅助函数 */
 
 // buildFeedVideos 根据[]video构造[]FeedVideoItem

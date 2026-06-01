@@ -164,7 +164,7 @@ func (h *FeedHandler) ListByPopularity(c *gin.Context) {
 }
 
 // ListByFollowing 获取关注的人的最新视频 JWT鉴权
-func (f *FeedHandler) ListByFollowing(c *gin.Context) {
+func (h *FeedHandler) ListByFollowing(c *gin.Context) {
 	var req ListByFollowingRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(apierror.ClassifyHttpStatus(err), gin.H{"error": err.Error()})
@@ -184,13 +184,44 @@ func (f *FeedHandler) ListByFollowing(c *gin.Context) {
 	if req.LatestTime > 0 {
 		latestTime = time.Unix(req.LatestTime, 0)
 	}
-	feedItems, err := f.feedService.ListByFollowing(c.Request.Context(), req.Limit, latestTime, accountID)
+	feedItems, err := h.feedService.ListByFollowing(c.Request.Context(), req.Limit, latestTime, accountID)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 	feedItems.VideoList = nonNilFeedVideoItems(feedItems.VideoList)
 	c.JSON(200, feedItems)
+}
+
+// ListByTag 根据标签名称查询视频 按照创建时间降序返回 软鉴权
+func (h *FeedHandler) ListByTag(c *gin.Context) {
+	var req ListByTagRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	if req.TagName == "" {
+		c.JSON(400, gin.H{"error": "tag_name is required"})
+		return
+	}
+	// 每次返回视频的数量限制为 [0, 50] 默认每次返回10条
+	if req.Limit <= 0 || req.Limit > 50 {
+		req.Limit = 10
+	}
+	accountID, err := jwt.GetAccountID(c)
+	if err != nil {
+		// 软鉴权不返回error 设置accountID为0
+		accountID = 0
+	}
+	items, err := h.feedService.ListByTag(c.Request.Context(), req.TagName, req.Limit, accountID)
+	if err != nil {
+		c.JSON(apierror.ClassifyHttpStatus(err), gin.H{"error": err.Error()})
+		return
+	}
+	resp := ListByTagResponse{
+		VideoList: nonNilFeedVideoItems(items),
+	}
+	c.JSON(200, resp)
 }
 
 /* 辅助函数 */

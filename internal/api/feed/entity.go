@@ -79,3 +79,12 @@ type ListByFollowingResponse struct {
 	NextTime  int64           `json:"next_time"`
 	HasMore   bool            `json:"has_more"`
 }
+
+type ListByTagRequest struct {
+	TagName string `json:"tag_name"`
+	Limit   int    `json:"limit"`
+}
+
+type ListByTagResponse struct {
+	VideoList []FeedVideoItem `json:"video_list"`
+}

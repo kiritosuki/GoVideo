@@ -12,6 +12,10 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
+const (
+	MaxRetryCount = 3
+)
+
 type RabbitMQ struct {
 	Conn *amqp.Connection
 	Ch   *amqp.Channel
@@ -95,7 +99,7 @@ func (r *RabbitMQ) DeclareTopic(exchange string, queue string, bindingKey string
 		return err
 	}
 	// 声明死信交换机和死信队列
-	if err := DeclareDLX(r.Ch, queue); err != nil {
+	if err := DeclareDLX(r.Ch, queue, bindingKey); err != nil {
 		log.Printf("DLX declare failed for %s: %v", queue, err)
 	}
 	return nil

@@ -121,3 +121,20 @@ func (r *FeedRepo) ListByFollowing(ctx context.Context, limit int, accountID uin
 	}
 	return videos, nil
 }
+
+// ListByTag 根据标签名称查询视频 返回按照时间降序排序
+func (r *FeedRepo) ListByTag(ctx context.Context, tagName string, limit int) ([]*video.Video, error) {
+	var videos []*video.Video
+	err := r.db.WithContext(ctx).
+		Model(&video.Video{}).
+		Joins("join video_tags on video_tags.video_id = videos.id").
+		Joins("join tags on tags.id = video_tags.tag_id").
+		Where("tags.name = ?", tagName).
+		Order("videos.create_time desc").
+		Limit(limit).
+		Find(&videos).Error
+	if err != nil {
+		return nil, err
+	}
+	return videos, nil
+}
