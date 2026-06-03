@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"go/constant"
 	"time"
 
 	"github.com/kiritosuki/GoVideo/internal/api/like"
@@ -43,20 +42,20 @@ func (w *LikeWorker) Run(ctx context.Context) error {
 
 // process 回调函数 用于真正消费消息
 func (w *LikeWorker) process(ctx context.Context, body []byte) error {
-	var event rabbitmq.LikeEvent
-	if err := json.Unmarshal(body, &event); err != nil {
+	var evt rabbitmq.LikeEvent
+	if err := json.Unmarshal(body, &evt); err != nil {
 		// 解析事件失败 直接丢弃该消息
 		return nil
 	}
-	if event.UserID == 0 || event.VideoID == 0 {
+	if evt.UserID == 0 || evt.VideoID == 0 {
 		// 无效消息 直接丢弃
 		return nil
 	}
-	switch event.Action {
+	switch evt.Action {
 	case "like":
-		return w.applyLike(ctx, event.UserID, event.VideoID)
+		return w.applyLike(ctx, evt.UserID, evt.VideoID)
 	case "unlike":
-		return w.applyUnlike(ctx, event.UserID, event.VideoID)
+		return w.applyUnlike(ctx, evt.UserID, evt.VideoID)
 	default:
 		// 无效消息 直接丢弃
 		return nil
@@ -94,5 +93,25 @@ func (w *LikeWorker) applyLike(ctx context.Context, userID uint, videoID uint) e
 
 // 消费取消点赞消息
 func (w *LikeWorker) applyUnlike(ctx context.Context, userID uint, videoID uint) error {
-
+	ok, err := w.videoRepo.IsExist(ctx, videoID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	// 删除点赞数据
+	deleted, err := w.likeRepo.DeleteByVideoAndAccount(ctx, videoID, userID)
+	if err != nil {
+		return err
+	}
+	if !deleted {
+		return nil
+	}
+	// 更新视频点赞数量
+	if err := w.videoRepo.ChangeLikesCount(ctx, videoID, -1); err != nil {
+		return err
+	}
+	// 更新视频热度
+	return w.videoRepo.ChangePopularity(ctx, videoID, -1)
 }

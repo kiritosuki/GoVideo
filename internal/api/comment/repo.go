@@ -46,3 +46,20 @@ func (r *CommentRepo) ListAllComments(ctx context.Context, videoID uint) ([]Comm
 	}
 	return comments, nil
 }
+
+// CreateComment 创建评论
+func (r *CommentRepo) CreateComment(ctx context.Context, comment *Comment) error {
+	return r.db.WithContext(ctx).Create(comment).Error
+}
+
+// GetByID 根据id获取评论
+func (r *CommentRepo) GetByID(ctx context.Context, id uint) (*Comment, error) {
+	var comment Comment
+	if err := r.db.WithContext(ctx).First(&comment, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &comment, nil
+}

@@ -51,6 +51,13 @@ type FindByIDRequest struct {
 	ID uint `json:"id"`
 }
 
+type FindByIDResponse struct {
+	ID        uint   `json:"id"`
+	Username  string `json:"username"`
+	AvatarURL string `json:"avatar_url,omitempty"`
+	Bio       string `json:"bio,omitempty"`
+}
+
 type FindByUsernameRequest struct {
 	Username string `json:"username"`
 }

@@ -63,12 +63,12 @@ func (q *LikeMQ) publish(ctx context.Context, action string, routingKey string, 
 	if err != nil {
 		return err
 	}
-	event := LikeEvent{
+	evt := LikeEvent{
 		EventID:    id,
 		Action:     action,
 		UserID:     userID,
 		VideoID:    videoID,
 		OccurredAt: time.Now(),
 	}
-	return q.PublishJSON(ctx, LikeExchange, routingKey, event)
+	return q.PublishJSON(ctx, LikeExchange, routingKey, evt)
 }

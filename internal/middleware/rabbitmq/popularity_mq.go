@@ -57,12 +57,12 @@ func (q *PopularityMQ) publish(ctx context.Context, action string, routingKey st
 	if err != nil {
 		return err
 	}
-	event := PopularityEvent{
+	evt := PopularityEvent{
 		EventID:    id,
 		Action:     action,
 		VideoID:    videoID,
 		Change:     change,
 		OccurredAt: time.Now().UTC(),
 	}
-	return q.PublishJSON(ctx, PopularityExchange, routingKey, event)
+	return q.PublishJSON(ctx, PopularityExchange, routingKey, evt)
 }

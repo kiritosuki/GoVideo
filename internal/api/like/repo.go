@@ -87,3 +87,13 @@ func (r *LikeRepo) LikeIgnoreDuplicate(ctx context.Context, l *Like) (bool, erro
 	}
 	return false, err
 }
+
+func (r *LikeRepo) DeleteByVideoAndAccount(ctx context.Context, videoID, accountID uint) (deleted bool, err error) {
+	if videoID == 0 || accountID == 0 {
+		return false, nil
+	}
+	res := r.db.WithContext(ctx).
+		Where("video_id = ? AND account_id = ?", videoID, accountID).
+		Delete(&Like{})
+	return res.RowsAffected > 0, res.Error
+}

@@ -148,7 +148,13 @@ func (h *AccountHandler) FindByID(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	} else {
-		c.JSON(200, account)
+		resp := &FindByIDResponse{
+			ID:        account.ID,
+			Username:  account.Username,
+			AvatarURL: account.AvatarURL,
+			Bio:       account.Bio,
+		}
+		c.JSON(200, resp)
 	}
 }
 

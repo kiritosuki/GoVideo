@@ -63,12 +63,12 @@ func (q *SocialMQ) publish(ctx context.Context, action string, routingKey string
 	if err != nil {
 		return err
 	}
-	event := SocialEvent{
+	evt := SocialEvent{
 		EventID:    id,
 		Action:     action,
 		FollowerID: followerID,
 		VloggerID:  vloggerID,
 		OccurredAt: time.Now().UTC(),
 	}
-	return q.PublishJSON(ctx, SocialExchange, routingKey, event)
+	return q.PublishJSON(ctx, SocialExchange, routingKey, evt)
 }

@@ -57,12 +57,12 @@ func (q *TimelineMQ) publish(ctx context.Context, action string, routingKey stri
 	if err != nil {
 		return err
 	}
-	event := TimelineEvent{
+	evt := TimelineEvent{
 		EventID:    id,
 		Action:     action,
 		VideoID:    videoID,
 		CreateTime: createTime,
 		OccurredAt: time.Now(),
 	}
-	return q.PublishJSON(ctx, TimelineExchange, routingKey, event)
+	return q.PublishJSON(ctx, TimelineExchange, routingKey, evt)
 }

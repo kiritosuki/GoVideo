@@ -7,11 +7,11 @@ import (
 	"strings"
 
 	"github.com/kiritosuki/GoVideo/internal/api/account"
+	"github.com/kiritosuki/GoVideo/internal/api/notification"
 	"github.com/kiritosuki/GoVideo/internal/api/video"
 	"github.com/kiritosuki/GoVideo/internal/apierror"
 	"github.com/kiritosuki/GoVideo/internal/middleware/rabbitmq"
 	rediscache "github.com/kiritosuki/GoVideo/internal/middleware/redis"
-	"github.com/kiritosuki/GoVideo/internal/worker"
 	"gorm.io/gorm"
 )
 
@@ -141,7 +141,7 @@ func (s *CommentService) notifyMentions(ctx context.Context, comment *Comment) {
 			// 如果没找到@的用户 跳过
 			continue
 		}
-		notif := worker.Notification{
+		notif := notification.Notification{
 			RecipientID: accountID,
 			SenderID:    comment.AuthorID,
 			Type:        "mention",
@@ -149,7 +149,7 @@ func (s *CommentService) notifyMentions(ctx context.Context, comment *Comment) {
 			Content:     comment.Username + " 在评论中提到了你",
 		}
 		s.commentRepo.db.WithContext(ctx).
-			Model(&worker.Notification{}).
+			Model(&notification.Notification{}).
 			Create(&notif)
 	}
 }

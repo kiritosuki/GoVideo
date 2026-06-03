@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"log"
 	"time"
 
@@ -10,17 +11,18 @@ import (
 	"github.com/kiritosuki/GoVideo/internal/api/feed"
 	"github.com/kiritosuki/GoVideo/internal/api/like"
 	"github.com/kiritosuki/GoVideo/internal/api/message"
+	"github.com/kiritosuki/GoVideo/internal/api/profile"
 	"github.com/kiritosuki/GoVideo/internal/api/social"
 	"github.com/kiritosuki/GoVideo/internal/api/video"
 	"github.com/kiritosuki/GoVideo/internal/middleware/jwt"
 	"github.com/kiritosuki/GoVideo/internal/middleware/rabbitmq"
 	"github.com/kiritosuki/GoVideo/internal/middleware/ratelimit"
 	rediscache "github.com/kiritosuki/GoVideo/internal/middleware/redis"
+	"github.com/kiritosuki/GoVideo/internal/worker"
 	"gorm.io/gorm"
 )
 
-// SetRouter
-// TODO 参数后续需要加上MQ
+// SetRouter 配置全局路由
 func SetRouter(db *gorm.DB, cache *rediscache.Client, mq *rabbitmq.RabbitMQ) *gin.Engine {
 	r := gin.Default()
 	// 设置信任的ip 默认是信任所有ip
@@ -35,12 +37,11 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, mq *rabbitmq.RabbitMQ) *gi
 	loginLimiter := ratelimit.Limit(cache, "account_login", 10, time.Minute, ratelimit.KeyByIP)    // 每分钟10次
 	registerLimiter := ratelimit.Limit(cache, "account_register", 5, time.Hour, ratelimit.KeyByIP) // 每小时5次
 	// 根据账号限流
-	likeLimiter := ratelimit.Limit(cache, "like_write", 30, time.Minute, ratelimit.KeyByAccount) // 每分钟30次
-	//commentLimiter := ratelimit.Limit(cache, "comment_write", 10, time.Minute, ratelimit.KeyByAccount) // 每分钟10次
-	//socialLimiter := ratelimit.Limit(cache, "social_write", 20, time.Minute, ratelimit.KeyByAccount)   // 每分钟20次
+	likeLimiter := ratelimit.Limit(cache, "like_write", 30, time.Minute, ratelimit.KeyByAccount)       // 每分钟30次
+	commentLimiter := ratelimit.Limit(cache, "comment_write", 10, time.Minute, ratelimit.KeyByAccount) // 每分钟10次
+	socialLimiter := ratelimit.Limit(cache, "social_write", 20, time.Minute, ratelimit.KeyByAccount)   // 每分钟20次
 
 	// account 路由
-	// TODO /getProfile 用户主页(视频数/获赞/粉丝)
 	accountRepo := account.NewAccountRepo(db)
 	accountService := account.NewAccountService(accountRepo, cache)
 	accountHandler := account.NewAccountHandler(accountService)
@@ -119,8 +120,8 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, mq *rabbitmq.RabbitMQ) *gi
 	protectedCommentGroup := commentGroup.Group("")
 	protectedCommentGroup.Use(jwt.JWTAuth(accountRepo, cache))
 	{
-		protectedCommentGroup.POST("/publish", commentHandler.PublishComment)
-		protectedCommentGroup.POST("/delete", commentHandler.DeleteComment)
+		protectedCommentGroup.POST("/publish", commentLimiter, commentHandler.PublishComment)
+		protectedCommentGroup.POST("/delete", commentLimiter, commentHandler.DeleteComment)
 	}
 
 	// social路由
@@ -136,8 +137,8 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, mq *rabbitmq.RabbitMQ) *gi
 	protectedSocialGroup := socialGroup.Group("")
 	protectedSocialGroup.Use(jwt.JWTAuth(accountRepo, cache))
 	{
-		protectedSocialGroup.POST("/follow", socialHandler.Follow)
-		protectedSocialGroup.POST("/unfollow", socialHandler.Unfollow)
+		protectedSocialGroup.POST("/follow", socialLimiter, socialHandler.Follow)
+		protectedSocialGroup.POST("/unfollow", socialLimiter, socialHandler.Unfollow)
 		protectedSocialGroup.POST("/listAllFollowers", socialHandler.ListAllFollowers)
 		protectedSocialGroup.POST("/listAllVloggers", socialHandler.ListAllVloggers)
 		protectedSocialGroup.POST("/getCounts", socialHandler.GetCounts)
@@ -157,9 +158,9 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, mq *rabbitmq.RabbitMQ) *gi
 	softFeedGroup.Use(jwt.SoftJWTAuth(accountRepo, cache))
 	{
 		softFeedGroup.POST("/listLatest", feedHandler.ListLatest)
-		softFeedGroup.POST("listLikesCount", feedHandler.ListLikesCount)
-		softFeedGroup.POST("listByPopularity", feedHandler.ListByPopularity)
-		softFeedGroup.POST("listByTag", feedHandler.ListByTag)
+		softFeedGroup.POST("/listLikesCount", feedHandler.ListLikesCount)
+		softFeedGroup.POST("/listByPopularity", feedHandler.ListByPopularity)
+		softFeedGroup.POST("/listByTag", feedHandler.ListByTag)
 	}
 
 	// message路由
@@ -171,8 +172,72 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, mq *rabbitmq.RabbitMQ) *gi
 	protectedMessageGroup.Use(jwt.JWTAuth(accountRepo, cache))
 	{
 		protectedMessageGroup.POST("/send", messageHandler.Send)
-		protectedMessageGroup.POST("list", messageHandler.List)
+		protectedMessageGroup.POST("/list", messageHandler.List)
 	}
+
+	// profile路由
+	profileService := profile.NewProfileService(accountRepo, videoRepo, socialRepo, cache)
+	profileHandler := profile.NewProfileHandler(profileService)
+	profileGroup := r.Group("/profile")
+	{
+		profileGroup.POST("/getAccountProfile", profileHandler.GetAccountProfile)
+	}
+
+	// timeline_mq
+	timelineMQ, err := rabbitmq.NewTimelineMQ(mq)
+	if err != nil {
+		log.Printf("timelineMQ init failed (timeline_mq disabled): %v\n", err)
+	}
+	// timeline_worker
+	// 开启后台协程 定期读取outbox消息 加入timelineMQ
+	worker.StartOutboxPoller(db, timelineMQ)
+	// 开启后台协程 定期消费timelineMQ的消息
+	worker.StartConsumer(timelineMQ, rabbitmq.TimelineQueue, cache)
+
+	// SSE notification
+	// notification_mq
+	if mq != nil && mq.Ch != nil {
+		mq.DeclareTopic(rabbitmq.LikeExchange, "notification.like", rabbitmq.LikeRoutingKeyLike)
+		mq.DeclareTopic(rabbitmq.CommentExchange, "notification.comment", rabbitmq.CommentRoutingKeyPublish)
+		mq.DeclareTopic(rabbitmq.SocialExchange, "notification.social", rabbitmq.SocialRoutingKeyFollow)
+	}
+	// sseHub
+	sseHub := worker.NewSSEHub(db)
+	notifGroup := r.Group("/notification")
+	notifGroup.Use(sseHub.SSERequireAuth()) // SSE鉴权
+	{
+		notifGroup.GET("/stream", sseHub.SSEHandler)
+		notifGroup.POST("/list", sseHub.ListHandler)
+		notifGroup.POST("/markRead", sseHub.MarkReadHandler)
+		notifGroup.POST("/unreadCount", sseHub.UnreadCountHandler)
+	}
+
+	go func() {
+		if mq != nil && mq.Ch != nil {
+			hub := sseHub
+			ctx := context.Background()
+			go func() {
+				w := worker.NewNotificationWorker(mq.Ch, db, "notification.like", hub)
+				if err := w.Run(ctx); err != nil {
+					log.Printf("notification-like worker: %v", err)
+				}
+			}()
+			go func() {
+				w := worker.NewNotificationWorker(mq.Ch, db, "notification.comment", hub)
+				if err := w.Run(ctx); err != nil {
+					log.Printf("notification-comment worker: %v", err)
+				}
+			}()
+			go func() {
+				w := worker.NewNotificationWorker(mq.Ch, db, "notification.social", hub)
+				if err := w.Run(ctx); err != nil {
+					log.Printf("notification-social worker: %v", err)
+				}
+			}()
+		} else {
+			log.Printf("Notification SSE disabled (MQ not available)")
+		}
+	}()
 
 	return r
 }

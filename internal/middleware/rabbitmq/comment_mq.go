@@ -62,7 +62,7 @@ func (q *CommentMQ) Delete(ctx context.Context, commentID uint) error {
 }
 
 // publish 向消息队列里发送消息
-func (q *CommentMQ) publish(ctx context.Context, action string, routingKey string, event CommentEvent) error {
+func (q *CommentMQ) publish(ctx context.Context, action string, routingKey string, evt CommentEvent) error {
 	if q == nil || q.RabbitMQ == nil {
 		return errors.New("comment_mq is not initialized")
 	}
@@ -70,8 +70,8 @@ func (q *CommentMQ) publish(ctx context.Context, action string, routingKey strin
 	if err != nil {
 		return err
 	}
-	event.EventID = id
-	event.Action = action
-	event.OccurredAt = time.Now().UTC()
-	return q.PublishJSON(ctx, CommentExchange, routingKey, event)
+	evt.EventID = id
+	evt.Action = action
+	evt.OccurredAt = time.Now().UTC()
+	return q.PublishJSON(ctx, CommentExchange, routingKey, evt)
 }
