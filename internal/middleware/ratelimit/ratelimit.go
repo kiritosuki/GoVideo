@@ -29,12 +29,12 @@ func Limit(cache *rediscache.Client, keyPrefix string, maxRequests int64, window
 			return
 		}
 		key := buildKey(keyPrefix, subject)
-		count, err := cache.IncrementWithExpr(c.Request.Context(), key, window)
+		allowed, _, err := cache.SlidingWindowAllow(c.Request.Context(), key, maxRequests, window)
 		if err != nil {
 			c.Next()
 			return
 		}
-		if count > maxRequests {
+		if !allowed {
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
 			return
 		}

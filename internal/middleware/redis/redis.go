@@ -95,15 +95,48 @@ else
 end
 `)
 
-// 时间窗口 用于限流
+// 固定窗口 用于限流
 // 在首次 INCR KEY 时重置过期时间 后续请求仅增加计数器
 // 可以在该时间段内限制请求次数 进行限流
+// TODO 滑动窗口替代 已经不再使用 后续可以选择移除
 var incrementWithExprScript = redis.NewScript(`
 local count = redis.call("INCR", KEYS[1])
 if count == 1 then
 	redis.call("PEXPIRE", KEYS[1], ARGV[1])
 end
 return count
+`)
+
+// 滑动窗口限流脚本
+// KEYS[1]: 限流zset key
+// KEYS[2]: 当前key对应的请求序列号key，用于保证同一毫秒内member唯一
+// ARGV[1]: 当前时间戳，毫秒
+// ARGV[2]: 窗口大小，毫秒
+// ARGV[3]: 最大请求数
+// ARGV[4]: key过期时间，毫秒
+var slidingWindowScript = redis.NewScript(`
+local key = KEYS[1]
+local seqKey = KEYS[2]
+local now = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local limit = tonumber(ARGV[3])
+local ttl = tonumber(ARGV[4])
+local minScore = now - window
+
+redis.call("ZREMRANGEBYSCORE", key, 0, minScore)
+local count = redis.call("ZCARD", key)
+if count >= limit then
+	redis.call("PEXPIRE", key, ttl)
+	redis.call("PEXPIRE", seqKey, ttl)
+	return {0, count}
+end
+
+local seq = redis.call("INCR", seqKey)
+local member = tostring(now) .. "-" .. tostring(seq)
+redis.call("ZADD", key, now, member)
+redis.call("PEXPIRE", key, ttl)
+redis.call("PEXPIRE", seqKey, ttl)
+return {1, count + 1}
 `)
 
 // Unlock 释放分布式锁
@@ -117,10 +150,52 @@ func (c *Client) Unlock(ctx context.Context, key string, token string) error {
 
 // IncrementWithExpr 用于对key做给定expr时间内的自增计数
 // 初次调用会开启过期时间 计时器为1 之后每次调用会让计数器原子性+1
+// TODO 滑动窗口替代 已经不再使用 后续可以选择移除
 func (c *Client) IncrementWithExpr(ctx context.Context, key string, expr time.Duration) (int64, error) {
 	if c == nil || c.rdb == nil {
 		return 0, nil
 	}
 	// 返回计数器次数
 	return incrementWithExprScript.Run(ctx, c.rdb, []string{key}, expr.Milliseconds()).Int64()
+}
+
+// SlidingWindowAllow 使用滑动窗口算法判断本次请求是否允许通过
+// 返回 bool 窗口内请求数量 error
+func (c *Client) SlidingWindowAllow(ctx context.Context, key string, maxRequests int64, window time.Duration) (bool, int64, error) {
+	return c.slidingWindowAllowAt(ctx, key, maxRequests, window, time.Now())
+}
+
+func (c *Client) slidingWindowAllowAt(ctx context.Context, key string, maxRequests int64, window time.Duration, now time.Time) (bool, int64, error) {
+	if c == nil || c.rdb == nil {
+		return true, 0, nil
+	}
+	if key == "" || maxRequests <= 0 || window <= 0 {
+		return true, 0, nil
+	}
+	ttl := window + time.Second
+	res, err := slidingWindowScript.Run(
+		ctx,
+		c.rdb,
+		[]string{key, key + ":seq"},
+		now.UnixMilli(),
+		window.Milliseconds(),
+		maxRequests,
+		ttl.Milliseconds(),
+	).Result()
+	if err != nil {
+		return true, 0, err
+	}
+	values, ok := res.([]interface{})
+	if !ok || len(values) != 2 {
+		return true, 0, errors.New("unexpected sliding window result")
+	}
+	allowed, ok := values[0].(int64)
+	if !ok {
+		return true, 0, errors.New("unexpected sliding window allowed value")
+	}
+	count, ok := values[1].(int64)
+	if !ok {
+		return true, 0, errors.New("unexpected sliding window count value")
+	}
+	return allowed == 1, count, nil
 }
