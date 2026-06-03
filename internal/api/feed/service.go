@@ -68,7 +68,7 @@ func (s *FeedService) GetVideosByIDs(ctx context.Context, videoIDs []uint) ([]*v
 
 	// L2: 查询redis缓存
 	var missedL2 []uint
-	if len(missedL1) > 0 {
+	if s.redisCache != nil && len(missedL1) > 0 {
 		cacheKeys := make([]string, len(missedL1))
 		for i, id := range missedL1 {
 			cacheKeys[i] = s.redisCache.Key("video:entity:%d", id)
@@ -103,6 +103,8 @@ func (s *FeedService) GetVideosByIDs(ctx context.Context, videoIDs []uint) ([]*v
 			missedL2 = missedL1
 			log.Printf("L2 Redis MGet failed, all query to MySQL: %v\n", err)
 		}
+	} else {
+		missedL2 = missedL1
 	}
 	if len(missedL2) == 0 {
 		return buildOrderedResult(videoIDs, videoMap), nil
@@ -122,15 +124,17 @@ func (s *FeedService) GetVideosByIDs(ctx context.Context, videoIDs []uint) ([]*v
 				if err != nil || v == nil {
 					return nil, err
 				}
-				safeCopy := *v
-				cacheKey := s.redisCache.Key("video:entity:%d", v.ID)
-				if bytes, err := json.Marshal(safeCopy); err == nil {
-					// 查询到视频 则异步回写redis
-					go func(key string, b []byte) {
-						cacheCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-						defer cancel()
-						s.redisCache.SetBytes(cacheCtx, key, b, time.Hour)
-					}(cacheKey, bytes)
+				if s.redisCache != nil {
+					safeCopy := *v
+					cacheKey := s.redisCache.Key("video:entity:%d", v.ID)
+					if bytes, err := json.Marshal(safeCopy); err == nil {
+						// 查询到视频 则异步回写redis
+						go func(key string, b []byte) {
+							cacheCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+							defer cancel()
+							s.redisCache.SetBytes(cacheCtx, key, b, time.Hour)
+						}(cacheKey, bytes)
+					}
 				}
 				return v, err
 			})
@@ -151,6 +155,26 @@ func (s *FeedService) GetVideosByIDs(ctx context.Context, videoIDs []uint) ([]*v
 
 // ListLatest 获取最新的几条视频 游标为latestBefore
 func (s *FeedService) ListLatest(ctx context.Context, limit int, latestBefore time.Time, accountID uint) (ListLatestResponse, error) {
+	// 如果redis不可用 直接查数据库
+	if s.redisCache == nil {
+		videos, err := s.feedRepo.ListLatest(ctx, limit, latestBefore)
+		if err != nil {
+			return ListLatestResponse{}, err
+		}
+		var nextTime int64
+		if len(videos) > 0 {
+			nextTime = videos[len(videos)-1].CreateTime.UnixMilli()
+		}
+		feedVideos, err := s.buildFeedVideos(ctx, videos, accountID)
+		if err != nil {
+			return ListLatestResponse{}, err
+		}
+		return ListLatestResponse{
+			VideoList: feedVideos,
+			NextTime:  nextTime,
+			HasMore:   len(videos) == limit,
+		}, nil
+	}
 	// 获取zset中score最低的一条数据 即create_time最旧的一条视频ID
 	zsetTail, err := s.redisCache.ZRangeWithScores(ctx, s.redisCache.Key("feed:global_timeline"), 0, 0)
 	if err != nil {

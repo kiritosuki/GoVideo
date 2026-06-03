@@ -65,9 +65,9 @@ func SoftJWTAuth(accountRepo *account.AccountRepo, cache *rediscache.Client) gin
 
 // check 实际查询redis/数据库 验证请求头中的token是否有效
 func check(c *gin.Context, claims *auth.Claims, tokenStr string, accountRepo *account.AccountRepo, cache *rediscache.Client) {
-	key := cache.Key("account:%d", claims.AccountID)
 	// 先查redis
 	if cache != nil {
+		key := cache.Key("account:%d", claims.AccountID)
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 50*time.Millisecond)
 		defer cancel()
 		bytes, err := cache.GetBytes(ctx, key)
@@ -94,6 +94,7 @@ func check(c *gin.Context, claims *auth.Claims, tokenStr string, accountRepo *ac
 	// 数据库存储的token与请求头token匹配
 	// 把token加入到缓存
 	if cache != nil {
+		key := cache.Key("account:%d", claims.AccountID)
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 50*time.Millisecond)
 		defer cancel()
 		if err := cache.SetBytes(ctx, key, []byte(tokenStr), 24*time.Hour); err != nil {
