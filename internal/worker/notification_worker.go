@@ -191,8 +191,8 @@ func (w *NotificationWorker) getVideoAuthorID(ctx context.Context, videoID uint)
 }
 
 // StartNotificationWorkers 启动通知相关的所有消费者
-func StartNotificationWorkers(ctx context.Context, mq *rabbitmq.RabbitMQ, db *gorm.DB, cache *rediscache.Client, hub notification.NotificationHub) {
-	if mq == nil || mq.Ch == nil {
+func StartNotificationWorkers(ctx context.Context, rmq *rabbitmq.RabbitMQ, db *gorm.DB, cache *rediscache.Client, hub notification.NotificationHub) {
+	if rmq == nil || rmq.Conn == nil {
 		log.Printf("Notification workers disabled: rabbitmq is not initialized")
 		return
 	}
@@ -211,7 +211,14 @@ func StartNotificationWorkers(ctx context.Context, mq *rabbitmq.RabbitMQ, db *go
 	for _, item := range workers {
 		item := item
 		go func() {
-			w := NewNotificationWorker(mq.Ch, db, item.queue, cache, hub)
+			client, err := rmq.NewChannelClient()
+			if err != nil {
+				log.Printf("%s channel init failed: %v", item.name, err)
+				return
+			}
+			defer client.CloseChannel()
+
+			w := NewNotificationWorker(client.Ch, db, item.queue, cache, hub)
 			if err := w.Run(ctx); err != nil {
 				log.Printf("%s worker: %v", item.name, err)
 			}
@@ -223,6 +230,10 @@ func StartNotificationWorkers(ctx context.Context, mq *rabbitmq.RabbitMQ, db *go
 func StartNotification(ctx context.Context, rmq *rabbitmq.RabbitMQ, db *gorm.DB, cache *rediscache.Client, hub notification.NotificationHub) {
 	// 订阅redis频道 会自动开启后台协程把接收到的信息推送到本节点hub
 	StartNotificationSubscriber(ctx, cache, hub)
+	if rmq == nil || rmq.Conn == nil {
+		log.Printf("NotificationMQ disabled: rabbitmq is not initialized")
+		return
+	}
 	// notification_channel
 	notificationClient, err := rmq.NewChannelClient()
 	if err != nil {
@@ -232,8 +243,9 @@ func StartNotification(ctx context.Context, rmq *rabbitmq.RabbitMQ, db *gorm.DB,
 	// notification_mq
 	if _, err := rabbitmq.NewNotificationMQ(notificationClient); err != nil {
 		log.Printf("NotificationMQ init failed (notification_mq disabled): %v\n", err)
+		_ = notificationClient.CloseChannel()
 		return
 	}
 	// 启动notification的所有worker
-	StartNotificationWorkers(ctx, notificationClient, db, cache, hub)
+	StartNotificationWorkers(ctx, rmq, db, cache, hub)
 }
