@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
 )
 
@@ -50,6 +51,22 @@ func (r *CommentRepo) ListAllComments(ctx context.Context, videoID uint) ([]Comm
 // CreateComment 创建评论
 func (r *CommentRepo) CreateComment(ctx context.Context, comment *Comment) error {
 	return r.db.WithContext(ctx).Create(comment).Error
+}
+
+// CreateCommentIgnoreDuplicate 创建评论 重复event_id直接忽略
+func (r *CommentRepo) CreateCommentIgnoreDuplicate(ctx context.Context, comment *Comment) (bool, error) {
+	if comment == nil || comment.EventID == "" {
+		return false, nil
+	}
+	err := r.db.WithContext(ctx).Create(comment).Error
+	if err == nil {
+		return true, nil
+	}
+	var mysqlErr *mysql.MySQLError
+	if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+		return false, nil
+	}
+	return false, err
 }
 
 // GetByID 根据id获取评论

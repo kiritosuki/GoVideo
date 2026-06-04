@@ -62,7 +62,7 @@ func (w *CommentWorker) process(ctx context.Context, body []byte) error {
 
 // applyPublish 消费评论消息
 func (w *CommentWorker) applyPublish(ctx context.Context, evt *rabbitmq.CommentEvent) error {
-	if evt == nil || evt.VideoID == 0 || evt.AuthorID == 0 || strings.TrimSpace(evt.Content) == "" {
+	if evt == nil || evt.EventID == "" || evt.VideoID == 0 || evt.AuthorID == 0 || strings.TrimSpace(evt.Content) == "" {
 		return nil
 	}
 	ok, err := w.videoRepo.IsExist(ctx, evt.VideoID)
@@ -74,14 +74,19 @@ func (w *CommentWorker) applyPublish(ctx context.Context, evt *rabbitmq.CommentE
 	}
 
 	c := &comment.Comment{
+		EventID:  evt.EventID,
 		Username: strings.TrimSpace(evt.Username),
 		VideoID:  evt.VideoID,
 		AuthorID: evt.AuthorID,
 		Content:  strings.TrimSpace(evt.Content),
 	}
 	// 创建评论
-	if err := w.commentRepo.CreateComment(ctx, c); err != nil {
+	created, err := w.commentRepo.CreateCommentIgnoreDuplicate(ctx, c)
+	if err != nil {
 		return err
+	}
+	if !created {
+		return nil
 	}
 	// 更新视频热度
 	return w.videoRepo.ChangePopularity(ctx, evt.VideoID, 1)

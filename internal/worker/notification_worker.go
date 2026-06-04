@@ -9,6 +9,7 @@ import (
 	"github.com/go-sql-driver/mysql"
 	"github.com/kiritosuki/GoVideo/internal/api/notification"
 	"github.com/kiritosuki/GoVideo/internal/middleware/rabbitmq"
+	rediscache "github.com/kiritosuki/GoVideo/internal/middleware/redis"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"gorm.io/gorm"
 )
@@ -17,14 +18,16 @@ type NotificationWorker struct {
 	ch    *amqp.Channel
 	db    *gorm.DB
 	queue string
+	cache *rediscache.Client
 	hub   notification.NotificationHub
 }
 
-func NewNotificationWorker(ch *amqp.Channel, db *gorm.DB, queue string, hub notification.NotificationHub) *NotificationWorker {
+func NewNotificationWorker(ch *amqp.Channel, db *gorm.DB, queue string, cache *rediscache.Client, hub notification.NotificationHub) *NotificationWorker {
 	return &NotificationWorker{
 		ch:    ch,
 		db:    db,
 		queue: queue,
+		cache: cache,
 		hub:   hub,
 	}
 }
@@ -48,6 +51,7 @@ func (w *NotificationWorker) process(ctx context.Context, d amqp.Delivery) error
 	if notif == nil {
 		return nil
 	}
+	// 把通知写入数据库
 	// 根据event_id保证消费幂等 重复消息直接丢弃并ack
 	if err := w.db.WithContext(ctx).Create(notif).Error; err != nil {
 		var mysqlErr *mysql.MySQLError
@@ -56,8 +60,35 @@ func (w *NotificationWorker) process(ctx context.Context, d amqp.Delivery) error
 		}
 		return err
 	}
+	if err := w.publishNotification(ctx, notif); err != nil {
+		log.Printf("notification redis publish failed, fallback to local sse push: %v", err)
+	}
+	return nil
+}
+
+// publishNotification 发布通知到redis频道/ssehub
+func (w *NotificationWorker) publishNotification(ctx context.Context, notif *notification.Notification) error {
+	if notif == nil {
+		return nil
+	}
+	if w.cache != nil {
+		msg := notification.PushMessage{
+			RecipientID:  notif.RecipientID,
+			Notification: *notif,
+		}
+		// 把通知发布到redis的pub/sub频道
+		if err := w.cache.PublishJSON(ctx, notification.PushChannel, msg); err == nil {
+			return nil
+		} else if w.hub == nil {
+			return err
+		} else {
+			// 发布到redis失败 则降级推送到本节点的hub
+			w.hub.Push(notif.RecipientID, notif)
+			return err
+		}
+	}
+	// 如果redis不可用 降级推送到本节点的hub
 	if w.hub != nil {
-		// 推送通知
 		w.hub.Push(notif.RecipientID, notif)
 	}
 	return nil
@@ -160,7 +191,7 @@ func (w *NotificationWorker) getVideoAuthorID(ctx context.Context, videoID uint)
 }
 
 // StartNotificationWorkers 启动通知相关的所有消费者
-func StartNotificationWorkers(ctx context.Context, mq *rabbitmq.RabbitMQ, db *gorm.DB, hub notification.NotificationHub) {
+func StartNotificationWorkers(ctx context.Context, mq *rabbitmq.RabbitMQ, db *gorm.DB, cache *rediscache.Client, hub notification.NotificationHub) {
 	if mq == nil || mq.Ch == nil {
 		log.Printf("Notification workers disabled: rabbitmq is not initialized")
 		return
@@ -180,10 +211,29 @@ func StartNotificationWorkers(ctx context.Context, mq *rabbitmq.RabbitMQ, db *go
 	for _, item := range workers {
 		item := item
 		go func() {
-			w := NewNotificationWorker(mq.Ch, db, item.queue, hub)
+			w := NewNotificationWorker(mq.Ch, db, item.queue, cache, hub)
 			if err := w.Run(ctx); err != nil {
 				log.Printf("%s worker: %v", item.name, err)
 			}
 		}()
 	}
+}
+
+// StartNotification 声明通知相关的所有MQ 启动所有worker 并启动订阅协程接收redis的信息 全面的调用入口
+func StartNotification(ctx context.Context, rmq *rabbitmq.RabbitMQ, db *gorm.DB, cache *rediscache.Client, hub notification.NotificationHub) {
+	// 订阅redis频道 会自动开启后台协程把接收到的信息推送到本节点hub
+	StartNotificationSubscriber(ctx, cache, hub)
+	// notification_channel
+	notificationClient, err := rmq.NewChannelClient()
+	if err != nil {
+		log.Printf("NotificationMQ channel init failed (notification_mq disabled): %v\n", err)
+		return
+	}
+	// notification_mq
+	if _, err := rabbitmq.NewNotificationMQ(notificationClient); err != nil {
+		log.Printf("NotificationMQ init failed (notification_mq disabled): %v\n", err)
+		return
+	}
+	// 启动notification的所有worker
+	StartNotificationWorkers(ctx, notificationClient, db, cache, hub)
 }

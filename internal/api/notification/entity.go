@@ -7,6 +7,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const PushChannel = "notification:push"
+
 type Notification struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
 	EventID     string    `gorm:"type:varchar(64);uniqueIndex;not null" json:"event_id"`
@@ -39,3 +41,8 @@ func NewSSEHub(db *gorm.DB) *SSEHub {
 // 这行代码声明一个不用的变量 关键是把*SSEHub赋值给了接口对象
 // 可以在编译时期检查*SSEHub有没有实现接口
 var _ NotificationHub = (*SSEHub)(nil)
+
+type PushMessage struct {
+	RecipientID  uint         `json:"recipient_id"`
+	Notification Notification `json:"notification"`
+}

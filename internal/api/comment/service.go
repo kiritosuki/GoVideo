@@ -3,15 +3,13 @@ package comment
 import (
 	"context"
 	"errors"
-	"regexp"
 	"strings"
 
-	"github.com/kiritosuki/GoVideo/internal/api/account"
-	"github.com/kiritosuki/GoVideo/internal/api/notification"
 	"github.com/kiritosuki/GoVideo/internal/api/video"
 	"github.com/kiritosuki/GoVideo/internal/apierror"
 	"github.com/kiritosuki/GoVideo/internal/middleware/rabbitmq"
 	rediscache "github.com/kiritosuki/GoVideo/internal/middleware/redis"
+	"github.com/kiritosuki/GoVideo/internal/util"
 	"gorm.io/gorm"
 )
 
@@ -70,12 +68,15 @@ func (s *CommentService) Publish(ctx context.Context, comment *Comment) error {
 	}
 	// 如果两个消息都发送成功
 	if mysqlEnqueued && redisEnqueued {
-		// 向数据库插入notification数据 用于后续通知被@的用户
-		s.notifyMentions(ctx, comment)
 		return nil
 	}
 	// fallback 如果推送评论消息失败 手动操作mysql
 	if !mysqlEnqueued {
+		eventID, err := util.RandHex(16)
+		if err != nil {
+			return err
+		}
+		comment.EventID = "mock:" + eventID
 		if err := s.commentRepo.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			// 判断视频是否存在
 			if err := tx.Select("id").First(&video.Video{}, comment.VideoID).Error; err != nil {
@@ -104,54 +105,7 @@ func (s *CommentService) Publish(ctx context.Context, comment *Comment) error {
 		// 更新视频热度缓存
 		video.UpdatePopularityCache(ctx, s.cache, comment.VideoID, 1)
 	}
-	// 向数据库插入notification数据 用于后续通知被@的用户
-	s.notifyMentions(ctx, comment)
 	return nil
-}
-
-// notifyMentions 向数据库插入notification数据 用于后续通知被@的用户
-func (s *CommentService) notifyMentions(ctx context.Context, comment *Comment) {
-	// 正则 匹配@开头的字符串 @用户名
-	mentionRegex := regexp.MustCompile(`@(\w+)`)
-	// 对评论内容进行正则匹配 -1表示匹配所有项
-	// 匹配后到结果如下：
-	//[
-	//	[@kirito, kirito],
-	//	[@sakura, sakura],
-	//]
-	matches := mentionRegex.FindAllStringSubmatch(comment.Content, -1)
-	if len(matches) == 0 {
-		// 没匹配到@
-		return
-	}
-	seen := make(map[string]bool)
-	for _, m := range matches {
-		username := m[1]
-		// 用户名已加入seen 或者@的用户是自己 跳过
-		if seen[username] || username == comment.Username {
-			continue
-		}
-		seen[username] = true
-		var accountID uint
-		if err := s.commentRepo.db.WithContext(ctx).
-			Model(&account.Account{}).
-			Where("username = ?", username).
-			Select("id").
-			Scan(&accountID).Error; err != nil || accountID == 0 {
-			// 如果没找到@的用户 跳过
-			continue
-		}
-		notif := notification.Notification{
-			RecipientID: accountID,
-			SenderID:    comment.AuthorID,
-			Type:        "mention",
-			TargetID:    comment.VideoID,
-			Content:     comment.Username + " 在评论中提到了你",
-		}
-		s.commentRepo.db.WithContext(ctx).
-			Model(&notification.Notification{}).
-			Create(&notif)
-	}
 }
 
 // Delete 删除评论

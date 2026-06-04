@@ -13,10 +13,11 @@ import (
 )
 
 const (
-	defaultOutboxBatchSize = 100
-	defaultOutboxInterval  = time.Second
-	maxOutboxRetry         = 3
-	maxOutboxErrorLength   = 512
+	defaultOutboxBatchSize         = 100
+	defaultOutboxInterval          = time.Second
+	defaultOutboxProcessingTimeout = 5 * time.Minute
+	maxOutboxRetry                 = 3
+	maxOutboxErrorLength           = 512
 
 	OutboxStatusPending    = "pending"
 	OutboxStatusProcessing = "processing"
@@ -29,6 +30,7 @@ type OutboxWorker struct {
 	timelineMQ *rabbitmq.TimelineMQ
 	batchSize  int
 	interval   time.Duration
+	timeout    time.Duration
 }
 
 func NewOutboxWorker(db *gorm.DB, timelineMQ *rabbitmq.TimelineMQ) *OutboxWorker {
@@ -37,6 +39,7 @@ func NewOutboxWorker(db *gorm.DB, timelineMQ *rabbitmq.TimelineMQ) *OutboxWorker
 		timelineMQ: timelineMQ,
 		batchSize:  defaultOutboxBatchSize,
 		interval:   defaultOutboxInterval,
+		timeout:    defaultOutboxProcessingTimeout,
 	}
 }
 
@@ -50,6 +53,10 @@ func (w *OutboxWorker) Run(ctx context.Context) error {
 	}
 	if w.interval <= 0 {
 		w.interval = defaultOutboxInterval
+	}
+	// 默认超时时间为5min
+	if w.timeout <= 0 {
+		w.timeout = defaultOutboxProcessingTimeout
 	}
 
 	ticker := time.NewTicker(w.interval)
@@ -69,6 +76,9 @@ func (w *OutboxWorker) Run(ctx context.Context) error {
 
 // pollOnce 进行一次扫描 把这些消息加入到timeline_mq
 func (w *OutboxWorker) pollOnce(ctx context.Context) error {
+	if err := w.resetExpiredProcessing(ctx); err != nil {
+		return err
+	}
 	var messages []video.OutboxMsg
 	if err := w.db.WithContext(ctx).
 		Where("status = ?", OutboxStatusPending).
@@ -85,7 +95,21 @@ func (w *OutboxWorker) pollOnce(ctx context.Context) error {
 	return nil
 }
 
+// resetExpiredProcessing 回收超时的processing消息 允许其他节点重新抢占处理
+func (w *OutboxWorker) resetExpiredProcessing(ctx context.Context) error {
+	deadline := time.Now().Add(-w.timeout)
+	return w.db.WithContext(ctx).
+		Model(&video.OutboxMsg{}).
+		Where("status = ? AND updated_at < ?", OutboxStatusProcessing, deadline).
+		Updates(map[string]any{
+			"status":     OutboxStatusPending,
+			"updated_at": time.Now(),
+		}).Error
+}
+
 // publishOne 把一条outbox消息加入timeline_mq
+// TODO 可选优化: 当前未实现outbox投递消息严格幂等
+// TODO 下游timeline使用ZSet天然保证了幂等性 可以容忍低概率的消息被重复投递重复消费
 func (w *OutboxWorker) publishOne(ctx context.Context, msg *video.OutboxMsg) error {
 	if msg == nil || msg.VideoID == 0 {
 		return nil

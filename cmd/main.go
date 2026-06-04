@@ -9,13 +9,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kiritosuki/GoVideo/internal/bootstrap"
 	"github.com/kiritosuki/GoVideo/internal/config"
 	"github.com/kiritosuki/GoVideo/internal/db"
 	apphttp "github.com/kiritosuki/GoVideo/internal/http"
 	"github.com/kiritosuki/GoVideo/internal/middleware/rabbitmq"
 	rediscache "github.com/kiritosuki/GoVideo/internal/middleware/redis"
 	"github.com/kiritosuki/GoVideo/internal/observability"
+	"github.com/kiritosuki/GoVideo/internal/worker"
 )
 
 func main() {
@@ -88,8 +88,8 @@ func main() {
 
 	// 设置路由并启动服务
 	r, notificationHub := apphttp.SetRouter(gormDB, cache, rmq)
-
-	bootstrap.StartNotification(ctx, rmq, gormDB, notificationHub)
+	// 启动消息通知推送服务
+	worker.StartNotification(ctx, rmq, gormDB, cache, notificationHub)
 	log.Printf("server is running on port %d\n", cfg.Server.Port)
 
 	if err = r.Run(":" + strconv.Itoa(cfg.Server.Port)); err != nil {

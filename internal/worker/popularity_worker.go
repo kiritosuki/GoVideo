@@ -39,6 +39,8 @@ func (w *PopularityWorker) Run(ctx context.Context) error {
 }
 
 // process 回调函数 用于真正消费消息
+// TODO 可选优化: 当前未实现消费幂等性保证
+// TODO 热度榜不要求严格幂等 消息被重复消费的概率较低 热度变化较小 可以容忍
 func (w *PopularityWorker) process(ctx context.Context, body []byte) error {
 	var evt rabbitmq.PopularityEvent
 	if err := json.Unmarshal(body, &evt); err != nil {

@@ -4,6 +4,7 @@ import "time"
 
 type Comment struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
+	EventID   string    `gorm:"type:varchar(64);uniqueIndex;not null" json:"event_id"`
 	Username  string    `gorm:"index" json:"username"`
 	VideoID   uint      `gorm:"index" json:"video_id"`
 	AuthorID  uint      `gorm:"index" json:"author_id"`
