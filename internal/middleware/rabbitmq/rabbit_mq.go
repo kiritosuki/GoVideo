@@ -124,3 +124,26 @@ func (r *RabbitMQ) PublishJSON(ctx context.Context, exchange string, routingKey 
 		Body:         bytes,
 	})
 }
+
+// NewChannelClient 返回新的*RabbitMQ对象 复用原Conn连接 但创建独立channel
+func (r *RabbitMQ) NewChannelClient() (*RabbitMQ, error) {
+	if r == nil || r.Conn == nil {
+		return nil, errors.New("rabbitmq connection is not initialized")
+	}
+	ch, err := r.Conn.Channel()
+	if err != nil {
+		return nil, err
+	}
+	return &RabbitMQ{
+		Conn: r.Conn,
+		Ch:   ch,
+	}, nil
+}
+
+// CloseChannel 仅关闭当前client持有的channel 不关闭共享的Conn连接
+func (r *RabbitMQ) CloseChannel() error {
+	if r == nil || r.Ch == nil {
+		return nil
+	}
+	return r.Ch.Close()
+}

@@ -58,12 +58,12 @@ func main() {
 	}
 
 	// 连接rabbitmq (可选 用于消息队列)
-	mq, err := rabbitmq.NewRabbitMQ(&cfg.RabbitMQ)
+	rmq, err := rabbitmq.NewRabbitMQ(&cfg.RabbitMQ)
 	if err != nil {
 		log.Printf("RabbitMQ config error (disabled): %v\n", err)
-		mq = nil
+		rmq = nil
 	} else {
-		defer mq.Close()
+		defer rmq.Close()
 		log.Printf("RabbitMQ connected\n")
 	}
 
@@ -81,7 +81,7 @@ func main() {
 	}
 
 	// 设置路由并启动服务
-	r := apphttp.SetRouter(gormDB, cache, mq)
+	r := apphttp.SetRouter(gormDB, cache, rmq)
 	log.Printf("server is running on port %d\n", cfg.Server.Port)
 	if err = r.Run(":" + strconv.Itoa(cfg.Server.Port)); err != nil {
 		log.Fatalf("failed to run server: %v", err)

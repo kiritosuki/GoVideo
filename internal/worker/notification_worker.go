@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 
 	"github.com/kiritosuki/GoVideo/internal/api/notification"
 	"github.com/kiritosuki/GoVideo/internal/middleware/rabbitmq"
@@ -121,4 +122,33 @@ func (w *NotificationWorker) process(ctx context.Context, d amqp.Delivery) error
 		w.hub.Push(notif.RecipientID, notif)
 	}
 	return nil
+}
+
+// StartNotificationWorkers 启动通知相关的所有消费者
+func StartNotificationWorkers(ctx context.Context, mq *rabbitmq.RabbitMQ, db *gorm.DB, hub notification.NotificationHub) {
+	if mq == nil || mq.Ch == nil {
+		log.Printf("Notification workers disabled: rabbitmq is not initialized")
+		return
+	}
+	if db == nil {
+		log.Printf("Notification workers disabled: db is not initialized")
+		return
+	}
+	workers := []struct {
+		name  string
+		queue string
+	}{
+		{name: "notification-like", queue: rabbitmq.NotificationLikeQueue},
+		{name: "notification-comment", queue: rabbitmq.NotificationCommentQueue},
+		{name: "notification-social", queue: rabbitmq.NotificationSocialQueue},
+	}
+	for _, item := range workers {
+		item := item
+		go func() {
+			w := NewNotificationWorker(mq.Ch, db, item.queue, hub)
+			if err := w.Run(ctx); err != nil {
+				log.Printf("%s worker: %v", item.name, err)
+			}
+		}()
+	}
 }

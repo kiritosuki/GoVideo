@@ -23,7 +23,7 @@ import (
 )
 
 // SetRouter 配置全局路由
-func SetRouter(db *gorm.DB, cache *rediscache.Client, mq *rabbitmq.RabbitMQ) *gin.Engine {
+func SetRouter(db *gorm.DB, cache *rediscache.Client, rmq *rabbitmq.RabbitMQ) *gin.Engine {
 	r := gin.Default()
 	// 设置信任的ip 默认是信任所有ip
 	// 对于信任的ip: 从header中获取clientIP
@@ -82,12 +82,20 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, mq *rabbitmq.RabbitMQ) *gi
 
 	// like 路由
 	likeRepo := like.NewLikeRepo(db)
-	likeMQ, err := rabbitmq.NewLikeMQ(mq)
+	likeClient, err := rmq.NewChannelClient()
+	if err != nil {
+		log.Printf("LikeMQ channel init failed (like_mq disabled): %v\n", err)
+	}
+	likeMQ, err := rabbitmq.NewLikeMQ(likeClient)
 	if err != nil {
 		log.Printf("LikeMQ init failed (like_mq disabled): %v\n", err)
 		likeMQ = nil
 	}
-	popularityMQ, err := rabbitmq.NewPopularityMQ(mq)
+	popularityClient, err := rmq.NewChannelClient()
+	if err != nil {
+		log.Printf("PopularityMQ channel init failed (popularity_mq disabled): %v\n", err)
+	}
+	popularityMQ, err := rabbitmq.NewPopularityMQ(popularityClient)
 	if err != nil {
 		log.Printf("PopularityMQ init failed (popularity_mq disabled): %v\n", err)
 		popularityMQ = nil
@@ -106,7 +114,11 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, mq *rabbitmq.RabbitMQ) *gi
 
 	// comment路由
 	commentRepo := comment.NewCommentRepo(db)
-	commentMQ, err := rabbitmq.NewCommentMQ(mq)
+	commentClient, err := rmq.NewChannelClient()
+	if err != nil {
+		log.Printf("CommentMQ channel init failed (comment_mq disabled): %v\n", err)
+	}
+	commentMQ, err := rabbitmq.NewCommentMQ(commentClient)
 	if err != nil {
 		log.Printf("CommentMQ init failed (comment_mq disabled): %v\n", err)
 		commentMQ = nil
@@ -126,7 +138,11 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, mq *rabbitmq.RabbitMQ) *gi
 
 	// social路由
 	socialRepo := social.NewSocialRepo(db)
-	socialMQ, err := rabbitmq.NewSocialMQ(mq)
+	socialClient, err := rmq.NewChannelClient()
+	if err != nil {
+		log.Printf("SocialMQ channel init failed (social_mq disabled): %v\n", err)
+	}
+	socialMQ, err := rabbitmq.NewSocialMQ(socialClient)
 	if err != nil {
 		log.Printf("SocialMQ init failed (social_mq disabled): %v\n", err)
 		socialMQ = nil
@@ -183,28 +199,20 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, mq *rabbitmq.RabbitMQ) *gi
 		profileGroup.POST("/getAccountProfile", profileHandler.GetAccountProfile)
 	}
 
-	// timeline_mq
-	timelineMQ, err := rabbitmq.NewTimelineMQ(mq)
-	if err != nil {
-		log.Printf("timelineMQ init failed (timeline_mq disabled): %v\n", err)
-	}
-	// timeline_worker
-	// 开启后台协程 定期读取outbox消息 加入timelineMQ
-	worker.StartOutboxPoller(db, timelineMQ)
-	// 开启后台协程 定期消费timelineMQ的消息
-	worker.StartConsumer(timelineMQ, rabbitmq.TimelineQueue, cache)
-
 	// SSE notification
 	// notification_mq
-	if mq != nil && mq.Ch != nil {
-		mq.DeclareTopic(rabbitmq.LikeExchange, "notification.like", rabbitmq.LikeRoutingKeyLike)
-		mq.DeclareTopic(rabbitmq.CommentExchange, "notification.comment", rabbitmq.CommentRoutingKeyPublish)
-		mq.DeclareTopic(rabbitmq.SocialExchange, "notification.social", rabbitmq.SocialRoutingKeyFollow)
+	notificationClient, err := rmq.NewChannelClient()
+	if err != nil {
+		log.Printf("NotificationMQ channel init failed (notification_mq disabled): %v\n", err)
+	}
+	if _, err := rabbitmq.NewNotificationMQ(notificationClient); err != nil {
+		log.Printf("NotificationMQ init failed (notification_mq disabled): %v\n", err)
+		notificationClient = nil
 	}
 	// sseHub
 	sseHub := worker.NewSSEHub(db)
 	notifGroup := r.Group("/notification")
-	notifGroup.Use(sseHub.SSERequireAuth()) // SSE鉴权
+	notifGroup.Use(sseHub.SSERequireAuth()) // SSE鉴权 token可放在query中
 	{
 		notifGroup.GET("/stream", sseHub.SSEHandler)
 		notifGroup.POST("/list", sseHub.ListHandler)
@@ -212,32 +220,7 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, mq *rabbitmq.RabbitMQ) *gi
 		notifGroup.POST("/unreadCount", sseHub.UnreadCountHandler)
 	}
 
-	go func() {
-		if mq != nil && mq.Ch != nil {
-			hub := sseHub
-			ctx := context.Background()
-			go func() {
-				w := worker.NewNotificationWorker(mq.Ch, db, "notification.like", hub)
-				if err := w.Run(ctx); err != nil {
-					log.Printf("notification-like worker: %v", err)
-				}
-			}()
-			go func() {
-				w := worker.NewNotificationWorker(mq.Ch, db, "notification.comment", hub)
-				if err := w.Run(ctx); err != nil {
-					log.Printf("notification-comment worker: %v", err)
-				}
-			}()
-			go func() {
-				w := worker.NewNotificationWorker(mq.Ch, db, "notification.social", hub)
-				if err := w.Run(ctx); err != nil {
-					log.Printf("notification-social worker: %v", err)
-				}
-			}()
-		} else {
-			log.Printf("Notification SSE disabled (MQ not available)")
-		}
-	}()
+	worker.StartNotificationWorkers(context.Background(), notificationClient, db, sseHub)
 
 	return r
 }

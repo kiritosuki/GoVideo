@@ -16,12 +16,23 @@ type Video struct {
 }
 
 type OutboxMsg struct {
-	ID         uint      `gorm:"primaryKey"`
-	VideoID    uint      `gorm:"index"`
-	EventType  string    `gorm:"type:varchar(50)"`
-	CreateTime time.Time `gorm:"autoCreateTime"`
-	Status     string    `gorm:"type:varchar(50);index"`
+	ID          uint       `gorm:"primaryKey"`
+	VideoID     uint       `gorm:"index"`
+	EventType   string     `gorm:"type:varchar(50)"`
+	CreateTime  time.Time  `gorm:"autoCreateTime"`
+	Status      string     `gorm:"type:varchar(50);index"`
+	RetryCount  int        `gorm:"not null;default:0"`
+	LastError   string     `gorm:"type:varchar(512)"`
+	UpdatedAt   time.Time  `gorm:"autoUpdateTime"`
+	PublishedAt *time.Time `gorm:"index"`
 }
+
+const (
+	OutboxStatusPending    = "pending"
+	OutboxStatusProcessing = "processing"
+	OutboxStatusPublished  = "published"
+	OutboxStatusFailed     = "failed"
+)
 
 type UploadVideoResponse struct {
 	URL     string `json:"url"`

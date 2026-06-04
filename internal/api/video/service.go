@@ -58,7 +58,7 @@ func (s *VideoService) Publish(ctx context.Context, video *Video) error {
 			VideoID:    video.ID,
 			EventType:  "video_published",
 			CreateTime: video.CreateTime,
-			Status:     "pending",
+			Status:     OutboxStatusPending,
 		}
 		// 将outbox消息写入数据库
 		if err := tx.Create(msg).Error; err != nil {
