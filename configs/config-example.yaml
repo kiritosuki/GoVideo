@@ -1,1 +1,39 @@
-package configs
+server:
+  port: 8080
+
+database:
+  host: localhost
+  port: 3306
+  user: root
+  password: change-me
+  dbname: go_video
+
+redis:
+  host: localhost
+  port: 6379
+  password:
+  db: 0
+
+rabbitmq:
+  host: localhost
+  port: 5672
+  username: guest
+  password: change-me
+
+jwt:
+  jwt_secret: change-me
+
+cos:
+  # 轻量对象存储兼容COS SDK，bucket需要填写完整 BucketName-Appid。
+  bucket: examplebucket-1250000000
+  region: ap-beijing
+  secret_id: change-me
+  secret_key: change-me
+  public_base_url: https://examplebucket-1250000000.cos.ap-beijing.myqcloud.com
+  timeout_seconds: 10
+
+observability:
+  pprof:
+    enabled: true
+    api_addr: localhost:6060
+    worker_addr: localhost:6061

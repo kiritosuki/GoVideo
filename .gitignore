@@ -45,3 +45,5 @@ temp/
 .history/
 /.run/
 /.secret
+/configs/config-dev.yaml
+/configs/config.yaml
