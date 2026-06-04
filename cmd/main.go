@@ -4,9 +4,12 @@ import (
 	"context"
 	"log"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 
+	"github.com/kiritosuki/GoVideo/internal/bootstrap"
 	"github.com/kiritosuki/GoVideo/internal/config"
 	"github.com/kiritosuki/GoVideo/internal/db"
 	apphttp "github.com/kiritosuki/GoVideo/internal/http"
@@ -80,9 +83,15 @@ func main() {
 		defer pprofServer.Close()
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// 设置路由并启动服务
-	r := apphttp.SetRouter(gormDB, cache, rmq)
+	r, notificationHub := apphttp.SetRouter(gormDB, cache, rmq)
+
+	bootstrap.StartNotification(ctx, rmq, gormDB, notificationHub)
 	log.Printf("server is running on port %d\n", cfg.Server.Port)
+
 	if err = r.Run(":" + strconv.Itoa(cfg.Server.Port)); err != nil {
 		log.Fatalf("failed to run server: %v", err)
 	}

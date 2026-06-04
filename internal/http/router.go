@@ -1,7 +1,6 @@
 package http
 
 import (
-	"context"
 	"log"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/kiritosuki/GoVideo/internal/api/feed"
 	"github.com/kiritosuki/GoVideo/internal/api/like"
 	"github.com/kiritosuki/GoVideo/internal/api/message"
+	"github.com/kiritosuki/GoVideo/internal/api/notification"
 	"github.com/kiritosuki/GoVideo/internal/api/profile"
 	"github.com/kiritosuki/GoVideo/internal/api/social"
 	"github.com/kiritosuki/GoVideo/internal/api/video"
@@ -18,12 +18,11 @@ import (
 	"github.com/kiritosuki/GoVideo/internal/middleware/rabbitmq"
 	"github.com/kiritosuki/GoVideo/internal/middleware/ratelimit"
 	rediscache "github.com/kiritosuki/GoVideo/internal/middleware/redis"
-	"github.com/kiritosuki/GoVideo/internal/worker"
 	"gorm.io/gorm"
 )
 
 // SetRouter 配置全局路由
-func SetRouter(db *gorm.DB, cache *rediscache.Client, rmq *rabbitmq.RabbitMQ) *gin.Engine {
+func SetRouter(db *gorm.DB, cache *rediscache.Client, rmq *rabbitmq.RabbitMQ) (*gin.Engine, notification.NotificationHub) {
 	r := gin.Default()
 	// 设置信任的ip 默认是信任所有ip
 	// 对于信任的ip: 从header中获取clientIP
@@ -199,18 +198,8 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, rmq *rabbitmq.RabbitMQ) *g
 		profileGroup.POST("/getAccountProfile", profileHandler.GetAccountProfile)
 	}
 
-	// SSE notification
-	// notification_mq
-	notificationClient, err := rmq.NewChannelClient()
-	if err != nil {
-		log.Printf("NotificationMQ channel init failed (notification_mq disabled): %v\n", err)
-	}
-	if _, err := rabbitmq.NewNotificationMQ(notificationClient); err != nil {
-		log.Printf("NotificationMQ init failed (notification_mq disabled): %v\n", err)
-		notificationClient = nil
-	}
-	// sseHub
-	sseHub := worker.NewSSEHub(db)
+	// notification路由 SSE推送
+	sseHub := notification.NewSSEHub(db)
 	notifGroup := r.Group("/notification")
 	notifGroup.Use(sseHub.SSERequireAuth()) // SSE鉴权 token可放在query中
 	{
@@ -220,7 +209,5 @@ func SetRouter(db *gorm.DB, cache *rediscache.Client, rmq *rabbitmq.RabbitMQ) *g
 		notifGroup.POST("/unreadCount", sseHub.UnreadCountHandler)
 	}
 
-	worker.StartNotificationWorkers(context.Background(), notificationClient, db, sseHub)
-
-	return r
+	return r, sseHub
 }

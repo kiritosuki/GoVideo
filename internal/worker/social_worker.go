@@ -67,6 +67,7 @@ func (w *SocialWorker) applyFollow(ctx context.Context, evt *rabbitmq.SocialEven
 	if err == nil {
 		return nil
 	}
+	// 忽略duplicate错误 幂等性
 	var mysqlErr *mysql.MySQLError
 	if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
 		return nil

@@ -1,9 +1,15 @@
 package notification
 
-import "time"
+import (
+	"sync"
+	"time"
+
+	"gorm.io/gorm"
+)
 
 type Notification struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
+	EventID     string    `gorm:"type:varchar(64);uniqueIndex;not null" json:"event_id"`
 	RecipientID uint      `gorm:"index;not null" json:"recipient_id"`
 	SenderID    uint      `gorm:"not null" json:"sender_id"`
 	Type        string    `gorm:"type:varchar(50);not null" json:"type"`
@@ -16,3 +22,20 @@ type Notification struct {
 type NotificationHub interface {
 	Push(userID uint, n *Notification)
 }
+
+type SSEHub struct {
+	mu      sync.RWMutex
+	clients map[uint][]chan *Notification
+	db      *gorm.DB
+}
+
+func NewSSEHub(db *gorm.DB) *SSEHub {
+	return &SSEHub{
+		clients: make(map[uint][]chan *Notification),
+		db:      db,
+	}
+}
+
+// 这行代码声明一个不用的变量 关键是把*SSEHub赋值给了接口对象
+// 可以在编译时期检查*SSEHub有没有实现接口
+var _ NotificationHub = (*SSEHub)(nil)

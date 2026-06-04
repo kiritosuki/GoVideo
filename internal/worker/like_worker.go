@@ -72,6 +72,7 @@ func (w *LikeWorker) applyLike(ctx context.Context, userID uint, videoID uint) e
 		return nil
 	}
 	// 插入点赞数据
+	// 忽略duplicate错误 幂等性
 	created, err := w.likeRepo.LikeIgnoreDuplicate(ctx, &like.Like{
 		VideoID:   videoID,
 		AccountID: userID,

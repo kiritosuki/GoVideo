@@ -1,36 +1,16 @@
-package worker
+package notification
 
 import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/kiritosuki/GoVideo/internal/api/notification"
 	"github.com/kiritosuki/GoVideo/internal/auth"
-	"gorm.io/gorm"
 )
 
-type SSEHub struct {
-	mu      sync.RWMutex
-	clients map[uint][]chan *notification.Notification
-	db      *gorm.DB
-}
-
-func NewSSEHub(db *gorm.DB) *SSEHub {
-	return &SSEHub{
-		clients: make(map[uint][]chan *notification.Notification),
-		db:      db,
-	}
-}
-
-// 这行代码声明一个不用的变量 关键是把*SSEHub赋值给了接口对象
-// 可以在编译时期检查*SSEHub有没有实现接口
-var _ notification.NotificationHub = (*SSEHub)(nil)
-
-func (h *SSEHub) Push(userID uint, n *notification.Notification) {
+func (h *SSEHub) Push(userID uint, n *Notification) {
 	h.mu.RLock()
 	chs, ok := h.clients[userID]
 	h.mu.RUnlock()
@@ -46,8 +26,8 @@ func (h *SSEHub) Push(userID uint, n *notification.Notification) {
 }
 
 // Subscribe 订阅一个新连接 用于消息推送
-func (h *SSEHub) Subscribe(userID uint) chan *notification.Notification {
-	ch := make(chan *notification.Notification, 20)
+func (h *SSEHub) Subscribe(userID uint) chan *Notification {
+	ch := make(chan *Notification, 20)
 	h.mu.Lock()
 	h.clients[userID] = append(h.clients[userID], ch)
 	h.mu.Unlock()
@@ -55,7 +35,7 @@ func (h *SSEHub) Subscribe(userID uint) chan *notification.Notification {
 }
 
 // Unsubscribe 关闭一个连接
-func (h *SSEHub) Unsubscribe(userID uint, ch chan *notification.Notification) {
+func (h *SSEHub) Unsubscribe(userID uint, ch chan *Notification) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	chs := h.clients[userID]
@@ -140,7 +120,7 @@ func (h *SSEHub) ListHandler(c *gin.Context) {
 	accountID, _ := c.Get("accountID")
 	userID := accountID.(uint)
 
-	var notifications []notification.Notification
+	var notifications []Notification
 	if err := h.db.WithContext(c.Request.Context()).
 		Where("recipient_id = ?", userID).
 		Order("created_at desc").
@@ -150,7 +130,7 @@ func (h *SSEHub) ListHandler(c *gin.Context) {
 		return
 	}
 	if notifications == nil {
-		notifications = []notification.Notification{}
+		notifications = []Notification{}
 	}
 	c.JSON(200, gin.H{"notifications": notifications})
 }
@@ -169,26 +149,26 @@ func (h *SSEHub) MarkReadHandler(c *gin.Context) {
 
 	if req.ID != nil {
 		h.db.WithContext(c.Request.Context()).
-			Model(&notification.Notification{}).
+			Model(&Notification{}).
 			Where("id = ? AND recipient_id = ?", *req.ID, userID).
 			Update("is_read", true)
 	} else {
 		h.db.WithContext(c.Request.Context()).
-			Model(&notification.Notification{}).
+			Model(&Notification{}).
 			Where("recipient_id = ?", userID).
 			Update("is_read", true)
 	}
 	c.JSON(200, gin.H{"message": "ok"})
 }
 
-// UnreadCountHandler 标记所有消息为已读
+// UnreadCountHandler 获取未读的消息数
 func (h *SSEHub) UnreadCountHandler(c *gin.Context) {
 	accountID, _ := c.Get("accountID")
 	userID := accountID.(uint)
 
 	var count int64
 	h.db.WithContext(c.Request.Context()).
-		Model(&notification.Notification{}).
+		Model(&Notification{}).
 		Where("recipient_id = ? AND is_read = ?", userID, false).
 		Count(&count)
 	c.JSON(200, gin.H{"count": count})
