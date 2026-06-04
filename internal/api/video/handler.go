@@ -1,6 +1,7 @@
 package video
 
 import (
+	"log"
 	"net/http"
 	"os"
 	"path"
@@ -11,17 +12,20 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/kiritosuki/GoVideo/internal/apierror"
+	cosstore "github.com/kiritosuki/GoVideo/internal/middleware/cos"
 	"github.com/kiritosuki/GoVideo/internal/middleware/jwt"
 	"github.com/kiritosuki/GoVideo/internal/util"
 )
 
 type VideoHandler struct {
 	videoService *VideoService
+	cosClient    *cosstore.Client
 }
 
-func NewVideoHandler(videoService *VideoService) *VideoHandler {
+func NewVideoHandler(videoService *VideoService, cosClient *cosstore.Client) *VideoHandler {
 	return &VideoHandler{
 		videoService: videoService,
+		cosClient:    cosClient,
 	}
 }
 
@@ -31,6 +35,10 @@ func (h *VideoHandler) UploadVideo(c *gin.Context) {
 	authorID, err := jwt.GetAccountID(c)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+	if h.cosClient == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "cos client is not initialized"})
 		return
 	}
 	// 提取前端上传的名为"file"的 multipart/form-data 类型文件
@@ -51,9 +59,9 @@ func (h *VideoHandler) UploadVideo(c *gin.Context) {
 		return
 	}
 	date := time.Now().Format("20060102")
-	// 按操作系统规则拼接路径 .run/uploads/videos/2/20060102
+	// 临时落盘路径 .run/uploads/videos/2/20060102
 	dir := filepath.Join(".run", "uploads", "videos", strconv.FormatUint(uint64(authorID), 10), date)
-	// 创建目录 .run/uploads/videos/2/20060102/
+	// 创建临时目录 .run/uploads/videos/2/20060102/
 	if err = os.MkdirAll(dir, 0755); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -72,10 +80,16 @@ func (h *VideoHandler) UploadVideo(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// 生成视频url链接路径 /static/videos/2/20060102/xxx.mp4
-	urlPath := path.Join("/static", "videos", strconv.FormatUint(uint64(authorID), 10), date, filename)
-	// 拼接url绝对路径
-	videoURL := util.BuildAbsoluteURL(c, urlPath)
+	// 删除临时落盘文件
+	defer removeTempFile(absPath)
+	// cos对象存储key videos/2/20060102/xxx.mp4
+	objectKey := path.Join("videos", strconv.FormatUint(uint64(authorID), 10), date, filename)
+	// 上传文件到cos
+	videoURL, err := h.cosClient.UploadFile(c.Request.Context(), objectKey, absPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, UploadVideoResponse{
 		URL:     videoURL,
 		PlayURL: videoURL,
@@ -88,6 +102,10 @@ func (h *VideoHandler) UploadCover(c *gin.Context) {
 	authorID, err := jwt.GetAccountID(c)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+	if h.cosClient == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "cos client is not initialized"})
 		return
 	}
 	// 提取前端上传的名为"file"的 multipart/form-data 类型文件
@@ -110,9 +128,9 @@ func (h *VideoHandler) UploadCover(c *gin.Context) {
 		return
 	}
 	date := time.Now().Format("20060102")
-	// 按操作系统规则拼接路径 .run/uploads/covers/2/20060102
+	// 临时落盘路径 .run/uploads/covers/2/20060102
 	dir := filepath.Join(".run", "uploads", "covers", strconv.FormatUint(uint64(authorID), 10), date)
-	// 创建目录 .run/uploads/covers/2/20060102/
+	// 创建临时目录 .run/uploads/covers/2/20060102/
 	if err = os.MkdirAll(dir, 0755); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -131,10 +149,16 @@ func (h *VideoHandler) UploadCover(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// 生成url链接路径 /static/covers/2/20060102/xxx.jpg
-	urlPath := path.Join("/static", "covers", strconv.FormatUint(uint64(authorID), 10), date, filename)
-	// 拼接url绝对路径
-	coverURL := util.BuildAbsoluteURL(c, urlPath)
+	// 删除临时落盘文件
+	defer removeTempFile(absPath)
+	// cos对象存储key covers/2/20060102/xxx.jpg
+	objectKey := path.Join("covers", strconv.FormatUint(uint64(authorID), 10), date, filename)
+	// 上传文件到cos
+	coverURL, err := h.cosClient.UploadFile(c.Request.Context(), objectKey, absPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, UploadCoverResponse{
 		URL:      coverURL,
 		CoverURL: coverURL,
@@ -205,4 +229,11 @@ func (h *VideoHandler) GetDetail(c *gin.Context) {
 		return
 	}
 	c.JSON(200, video)
+}
+
+// removeTempFile 删除临时落盘文件
+func removeTempFile(filepath string) {
+	if err := os.Remove(filepath); err != nil {
+		log.Printf("remove temp upload file failed: path=%s err=%v", filepath, err)
+	}
 }

@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
-	"path"
 	"strings"
 	"time"
 
@@ -15,7 +13,7 @@ import (
 	tencentcos "github.com/tencentyun/cos-go-sdk-v5"
 )
 
-const defaultTimeout = 10 * time.Second
+const defaultTimeout = 300 * time.Second
 
 // Client 封装腾讯云COS客户端 外部通过该对象完成对象存储操作
 type Client struct {
@@ -62,8 +60,9 @@ func NewClient(cfg *config.COSConfig) (*Client, error) {
 	}, nil
 }
 
-// PutObject 上传对象 返回对象可访问URL
-func (c *Client) PutObject(ctx context.Context, key string, body io.Reader) (string, error) {
+// UploadFile 上传本地文件 返回对象可访问URL
+// SDK会根据文件大小自动选择普通上传或分块上传
+func (c *Client) UploadFile(ctx context.Context, key string, filePath string) (string, error) {
 	key = normalizeKey(key)
 	if c == nil || c.client == nil {
 		return "", errors.New("cos client is not initialized")
@@ -71,13 +70,13 @@ func (c *Client) PutObject(ctx context.Context, key string, body io.Reader) (str
 	if key == "" {
 		return "", errors.New("cos object key is required")
 	}
-	if body == nil {
-		return "", errors.New("cos object body is nil")
+	if strings.TrimSpace(filePath) == "" {
+		return "", errors.New("cos upload file path is required")
 	}
-	if _, err := c.client.Object.Put(ctx, key, body, nil); err != nil {
+	if _, _, err := c.client.Object.Upload(ctx, key, filePath, nil); err != nil {
 		return "", err
 	}
-	return c.ObjectURL(key), nil
+	return c.ObjectURL(key)
 }
 
 // DeleteObject 删除对象
@@ -94,32 +93,21 @@ func (c *Client) DeleteObject(ctx context.Context, key string) error {
 }
 
 // ObjectURL 根据对象key生成可访问URL
-func (c *Client) ObjectURL(key string) string {
+func (c *Client) ObjectURL(key string) (string, error) {
 	key = normalizeKey(key)
 	if key == "" {
-		return ""
-	}
-	if c != nil && c.publicBaseURL != "" {
-		return c.publicBaseURL + "/" + key
+		return "", errors.New("cos object key is required")
 	}
 	if c == nil || c.bucketURL == nil {
-		return "/" + key
+		return "", errors.New("cos client is not initialized")
 	}
-	return strings.TrimRight(c.bucketURL.String(), "/") + "/" + key
+	if c.publicBaseURL != "" {
+		return c.publicBaseURL + "/" + key, nil
+	}
+	return strings.TrimRight(c.bucketURL.String(), "/") + "/" + key, nil
 }
 
-// ObjectKey 拼接对象key 使用正斜杠分隔 避免业务层直接处理路径细节
-func ObjectKey(parts ...string) string {
-	cleanParts := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = normalizeKey(part)
-		if part != "" {
-			cleanParts = append(cleanParts, part)
-		}
-	}
-	return path.Join(cleanParts...)
-}
-
+// normalizeKey 去掉key前后的空格和前导的"/"
 func normalizeKey(key string) string {
 	return strings.TrimLeft(strings.TrimSpace(key), "/")
 }

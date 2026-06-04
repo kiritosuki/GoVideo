@@ -2,6 +2,7 @@ package account
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"os"
 	"path"
@@ -11,17 +12,20 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/kiritosuki/GoVideo/internal/apierror"
+	cosstore "github.com/kiritosuki/GoVideo/internal/middleware/cos"
 	"github.com/kiritosuki/GoVideo/internal/util"
 	"gorm.io/gorm"
 )
 
 type AccountHandler struct {
 	accountService *AccountService
+	cosClient      *cosstore.Client
 }
 
-func NewAccountHandler(accountService *AccountService) *AccountHandler {
+func NewAccountHandler(accountService *AccountService, cosClient *cosstore.Client) *AccountHandler {
 	return &AccountHandler{
 		accountService: accountService,
+		cosClient:      cosClient,
 	}
 }
 
@@ -194,6 +198,10 @@ func (h *AccountHandler) UploadAvatar(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return
 	}
+	if h.cosClient == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "cos client is not initialized"})
+		return
+	}
 	// 提取前端上传的名为"file"的 multipart/form-data 类型文件
 	file, err := c.FormFile("file")
 	if err != nil {
@@ -213,10 +221,9 @@ func (h *AccountHandler) UploadAvatar(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "only .jpg/.jpeg/.png/.webp allowed"})
 		return
 	}
-	// 按操作系统规则拼接路径
-	// .run/uploads/avatars/account_id
+	// 临时落盘路径 .run/uploads/avatars/account_id
 	dir := filepath.Join(".run", "uploads", "avatars", strconv.FormatUint(uint64(accountID), 10))
-	// 创建目录 .run/uploads/avatars/account_id/
+	// 创建临时目录 .run/uploads/avatars/account_id/
 	if err = os.MkdirAll(dir, 0755); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -235,11 +242,16 @@ func (h *AccountHandler) UploadAvatar(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// 生成文件url链接路径 /static/avatars/account_id/xxx.jpg
-	urlPath := path.Join("/static", "avatars", strconv.FormatUint(uint64(accountID), 10), filename)
-	// 拼接url绝对路径
-	// http://example.com/static/avatars/account_id/xxx.jpg
-	avatarURL := util.BuildAbsoluteURL(c, urlPath)
+	// 删除临时文件
+	defer removeTempFile(absPath)
+	// cos对象存储key avatars/2/xxx.jpg
+	objectKey := path.Join("avatars", strconv.FormatUint(uint64(accountID), 10), filename)
+	// 上传文件到cos
+	avatarURL, err := h.cosClient.UploadFile(c.Request.Context(), objectKey, absPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	// 更新数据库中的avatar_url
 	if err = h.accountService.UpdateAvatar(c.Request.Context(), accountID, avatarURL); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -281,4 +293,11 @@ func getAccountID(c *gin.Context) (uint, error) {
 		return 0, errors.New("accountID has invalid type")
 	}
 	return id, nil
+}
+
+// removeTempFile 删除临时落盘文件
+func removeTempFile(filepath string) {
+	if err := os.Remove(filepath); err != nil {
+		log.Printf("remove temp upload file failed: path=%s err=%v", filepath, err)
+	}
 }
