@@ -4,8 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"log"
-	"os"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -15,27 +14,23 @@ const (
 	JWTExpire = 15 * time.Minute
 )
 
-var randJWTSecret string
+var jwtSigningSecret []byte
 
-// jwtSecret 从环境变量读取jwt签名密钥
-// 如果未读取到 则会生成随机的签名密钥(服务一旦重启 随机签名密钥则会失效)
-func jwtSecret() []byte {
-	secret := os.Getenv("JWT_SECRET")
+// SetJWTSecret 设置JWT签名密钥 应用启动后必须先调用
+func SetJWTSecret(secret string) error {
+	secret = strings.TrimSpace(secret)
 	if secret == "" {
-		if randJWTSecret != "" {
-			secret = randJWTSecret
-		} else {
-			b := make([]byte, 32)
-			if _, err := rand.Read(b); err != nil {
-				log.Printf("FATAL: cannot generate JWT secret: %v\n", err)
-				return []byte("fallback-unsafe-key-change-me")
-			}
-			secret = hex.EncodeToString(b)
-			randJWTSecret = secret
-		}
-		log.Printf("WARNING: JWT_SECRET not set, generated random key. All tokens invalid on restart.")
+		return errors.New("jwt secret is required")
 	}
-	return []byte(secret)
+	jwtSigningSecret = []byte(secret)
+	return nil
+}
+
+func jwtSecret() ([]byte, error) {
+	if len(jwtSigningSecret) == 0 {
+		return nil, errors.New("jwt secret is not initialized")
+	}
+	return jwtSigningSecret, nil
 }
 
 type Claims struct {
@@ -60,7 +55,11 @@ func GenerateToken(accountID uint, username string) (string, error) {
 	// 生成token
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	// 签名token
-	return token.SignedString(jwtSecret())
+	secret, err := jwtSecret()
+	if err != nil {
+		return "", err
+	}
+	return token.SignedString(secret)
 }
 
 // GenerateRefreshToken 生成refreshToken
@@ -81,7 +80,7 @@ func ParseToken(tokenStr string) (*Claims, error) {
 			if token.Method == nil || token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
 				return nil, errors.New("unexpected signing method")
 			}
-			return jwtSecret(), nil
+			return jwtSecret()
 		},
 	)
 	if err != nil {

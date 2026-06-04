@@ -13,6 +13,8 @@ type Config struct {
 	Database      DatabaseConfig      `yaml:"database"`
 	Redis         RedisConfig         `yaml:"redis"`
 	RabbitMQ      RabbitMQConfig      `yaml:"rabbitmq"`
+	JWT           JWTConfig           `yaml:"jwt"`
+	COS           COSConfig           `yaml:"cos"`
 	Observability ObservabilityConfig `yaml:"observability"`
 }
 
@@ -40,6 +42,19 @@ type RabbitMQConfig struct {
 	Port     int    `yaml:"port"`
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
+}
+
+type JWTConfig struct {
+	JWTSecret string `yaml:"jwt_secret"`
+}
+
+type COSConfig struct {
+	Bucket         string `yaml:"bucket"`
+	Region         string `yaml:"region"`
+	SecretID       string `yaml:"secret_id"`
+	SecretKey      string `yaml:"secret_key"`
+	PublicBaseURL  string `yaml:"public_base_url"`
+	TimeoutSeconds int    `yaml:"timeout_seconds"`
 }
 
 type ObservabilityConfig struct {
@@ -127,6 +142,29 @@ func ApplyEnvOverrides(config *Config) {
 	}
 	if v := os.Getenv("RABBITMQ_PASS"); v != "" {
 		config.RabbitMQ.Password = v
+	}
+	if v := os.Getenv("JWT_SECRET"); v != "" {
+		config.JWT.JWTSecret = v
+	}
+	if v := os.Getenv("COS_BUCKET"); v != "" {
+		config.COS.Bucket = v
+	}
+	if v := os.Getenv("COS_REGION"); v != "" {
+		config.COS.Region = v
+	}
+	if v := os.Getenv("COS_SECRET_ID"); v != "" {
+		config.COS.SecretID = v
+	}
+	if v := os.Getenv("COS_SECRET_KEY"); v != "" {
+		config.COS.SecretKey = v
+	}
+	if v := os.Getenv("COS_PUBLIC_BASE_URL"); v != "" {
+		config.COS.PublicBaseURL = v
+	}
+	if v := os.Getenv("COS_TIMEOUT_SECONDS"); v != "" {
+		if timeout, err := strconv.Atoi(v); err == nil {
+			config.COS.TimeoutSeconds = timeout
+		}
 	}
 }
 

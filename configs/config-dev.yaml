@@ -16,6 +16,15 @@ rabbitmq:
   port: 5672
   username: guest
   password: guest
+jwt:
+  jwt_secret: 1234
+cos:
+  bucket: go-video-1370013991
+  region: ap-chengdu
+  secret_id:
+  secret_key:
+  public_base_url:
+  timeout_seconds: 10
 observability:
   pprof:
     enabled: true

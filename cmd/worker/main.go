@@ -65,7 +65,7 @@ func main() {
 	// 加载配置
 	configPath := os.Getenv("CONFIG_PATH")
 	if configPath == "" {
-		configPath = "configs/config.yaml"
+		configPath = "configs/config-dev.yaml"
 	}
 	log.Printf("Loading config from %s", configPath)
 	cfg, err := config.Load(configPath)

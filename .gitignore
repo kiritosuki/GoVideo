@@ -44,3 +44,4 @@ temp/
 .cache/
 .history/
 /.run/
+/.secret

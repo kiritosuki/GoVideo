@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kiritosuki/GoVideo/internal/auth"
 	"github.com/kiritosuki/GoVideo/internal/config"
 	"github.com/kiritosuki/GoVideo/internal/db"
 	apphttp "github.com/kiritosuki/GoVideo/internal/http"
@@ -29,6 +30,10 @@ func main() {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		log.Fatalln("load config failed! please set correct CONFIG_PATH")
+	}
+	// 设置JWT签名密钥
+	if err := auth.SetJWTSecret(cfg.JWT.JWTSecret); err != nil {
+		log.Fatalf("jwt config error: %v\n", err)
 	}
 
 	// 连接数据库
@@ -86,12 +91,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// 设置路由并启动服务
+	// 设置路由并启动api服务
 	r, notificationHub := apphttp.SetRouter(gormDB, cache, rmq)
 	// 启动消息通知推送服务
 	worker.StartNotification(ctx, rmq, gormDB, cache, notificationHub)
 	log.Printf("server is running on port %d\n", cfg.Server.Port)
 
+	// 服务运行...
 	if err = r.Run(":" + strconv.Itoa(cfg.Server.Port)); err != nil {
 		log.Fatalf("failed to run server: %v", err)
 	}
