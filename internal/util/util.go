@@ -23,6 +23,8 @@ func RandHex(n int) (string, error) {
 // BuildAbsoluteURL 拼接绝对url请求路径
 // 如传入 /static/avatars/2/xxx.jpg
 // 拼接为 http://example.com/static/avatars/2/xxx.jpg
+// TODO 旧代码留存 上传文件保存到本地时使用
+// TODO 目前已用COS对象存储 该函数未被使用
 func BuildAbsoluteURL(c *gin.Context, urlPath string) string {
 	// 默认是http 有TLS则是https
 	scheme := "http"
