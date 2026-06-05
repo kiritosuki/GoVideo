@@ -4,7 +4,7 @@
 
 ## 当前结果
 
-最近一次集成测试结果：
+最近一次已执行的集成测试结果：
 
 ```text
 Status: PASS
@@ -16,6 +16,8 @@ Cover Packages: ./internal/...
 ```
 
 这里的覆盖率通过脚本中的 `-coverpkg=./internal/...` 统计，表示测试对后端核心代码包的语句覆盖率，而不是只统计 `tests/integration` 测试包本身。
+
+注意：新增 `api_smoke_integration_test.go` 和 `cos_integration_test.go` 后，需要重新运行脚本更新这里的测试数量和覆盖率。
 
 本轮集成测试曾暴露并修复一个真实业务问题：
 
@@ -118,6 +120,8 @@ tests/integration/
   integration_test.go
   testdata_helper_test.go
 
+  api_smoke_integration_test.go
+  cos_integration_test.go
   db_schema_integration_test.go
 
   redis_cache_integration_test.go
@@ -371,13 +375,58 @@ popularity_worker_integration_test.go
   - 消费热度消息更新分钟级热榜。
   - 正负 change 都能生效。
 
+### API Smoke
+
+覆盖文件：
+
+```text
+api_smoke_integration_test.go
+```
+
+覆盖点：
+
+- 使用 `httptest` 直接请求 Gin router，不启动真实 HTTP 端口。
+- 注册作者和观众两个用户。
+- 登录获取 JWT。
+- 作者发布视频。
+- 观众拉取 feed。
+- 观众点赞视频，并等待 LikeWorker 异步落库。
+- 观众评论视频，并等待 CommentWorker 异步落库。
+- 观众关注作者，并等待 SocialWorker 异步落库。
+- 查询关注流。
+- 发送私信。
+- 查询个人主页。
+- 查询通知列表、未读数、标记已读。
+- 未登录访问受保护接口返回 401。
+
+这组测试等价于自动化接口主链路测试，但不会经过前端、Nginx、真实网络端口和浏览器。
+
+### COS 对象存储
+
+覆盖文件：
+
+```text
+cos_integration_test.go
+```
+
+覆盖点：
+
+- 从 `CONFIG_PATH` 加载真实 COS 配置。
+- 配置缺失或仍为占位值时自动跳过，避免误请求。
+- 创建一个很小的本地文本文件。
+- 调用 `UploadFile` 上传到对象存储。
+- 校验返回的对象 URL 非空，并包含对象 key。
+- 如果配置了 `public_base_url`，校验返回 URL 使用该前缀。
+- 调用 `DeleteObject` 删除测试对象。
+
+这组测试只产生一次真实上传和一次真实删除请求，用于验证对象存储基础功能可用，不做大文件上传和频繁请求。
+
 ## 暂未覆盖或后续补充
 
 以下场景建议后续继续补：
 
-- handler/API 级完整链路测试。
 - SSE 长连接的真实 HTTP 流式响应测试。
-- COS 真实上传测试。
+- COS 大文件分块上传场景。
 - outbox processing 超时回收的快速测试。
 
 其中 outbox processing 超时当前默认是 5 分钟，字段也是 worker 内部配置。为了不修改业务代码迎合测试，目前没有强行压缩超时时间做测试。
