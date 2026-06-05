@@ -1,0 +1,72 @@
+# 集成测试用中间件环境
+# 这里只启动 MySQL、Redis、RabbitMQ，不启动 Go API/worker 进程。
+#
+# 启动:
+#   docker compose -f deploy/docker-compose.integration.yml up -d
+#
+# 清理数据并关闭:
+#   docker compose -f deploy/docker-compose.integration.yml down -v
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: govideo-it-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: 1234
+      MYSQL_DATABASE: go_video_test
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      # 宿主机端口使用 13306，避免占用本机默认 3306。
+      - "13306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.2-alpine
+    container_name: govideo-it-redis
+    ports:
+      # 宿主机端口使用 16379，避免占用本机默认 6379。
+      - "16379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:4.2-management-alpine
+    container_name: govideo-it-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+      TZ: Asia/Shanghai
+    ports:
+      # AMQP 端口，Go 服务连接这个端口。
+      - "25672:5672"
+      # RabbitMQ 管理后台，浏览器访问 http://宿主机IP:25673。
+      - "25673:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  redis-data:
+  rabbitmq-data:

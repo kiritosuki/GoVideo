@@ -47,3 +47,4 @@ temp/
 /.secret
 /configs/config-dev.yaml
 /configs/config.yaml
+/configs/config-integration.yaml
