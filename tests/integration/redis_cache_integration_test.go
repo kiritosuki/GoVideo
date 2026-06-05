@@ -80,7 +80,7 @@ func TestRedisZSetAndUnion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("删除后查询ZSET失败: %v", err)
 	}
-	if len(members) != 2 || members[0] != "2" || members[1] != "1" {
+	if len(members) != 2 || members[0] != "3" || members[1] != "2" {
 		t.Fatalf("ZSET范围删除结果异常: %#v", members)
 	}
 }

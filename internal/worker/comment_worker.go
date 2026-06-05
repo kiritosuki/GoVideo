@@ -47,9 +47,6 @@ func (w *CommentWorker) process(ctx context.Context, body []byte) error {
 	if err := json.Unmarshal(body, &evt); err != nil {
 		return nil
 	}
-	if evt.VideoID == 0 || evt.AuthorID == 0 {
-		return nil
-	}
 	switch evt.Action {
 	case "publish":
 		return w.applyPublish(ctx, &evt)

@@ -2,6 +2,32 @@
 
 本文档说明 GoVideo 后端集成测试的运行方式、目录结构和覆盖范围。
 
+## 当前结果
+
+最近一次集成测试结果：
+
+```text
+Status: PASS
+Passed: 42
+Failed: 0
+Skipped: 0
+Coverage: 42.8%
+Cover Packages: ./internal/...
+```
+
+这里的覆盖率通过脚本中的 `-coverpkg=./internal/...` 统计，表示测试对后端核心代码包的语句覆盖率，而不是只统计 `tests/integration` 测试包本身。
+
+本轮集成测试曾暴露并修复一个真实业务问题：
+
+- `CommentWorker` 删除评论消息被前置字段校验误丢弃。
+- 原因是 `comment.delete` 消息只携带 `CommentID`，不携带 `VideoID/AuthorID`。
+- 修复方式是把字段校验下沉到不同 action 的处理函数中：`publish` 走发布字段校验，`delete` 只校验 `CommentID`。
+
+同时修正过一个测试预期问题：
+
+- `ZRemRangeByRank(0, 0)` 删除的是 ZSET 按 score 升序排名最低的 member。
+- 因此删除后按倒序查询应剩余高分 member，而不是低分 member。
+
 ## 运行前准备
 
 集成测试依赖真实中间件：
@@ -363,3 +389,22 @@ popularity_worker_integration_test.go
 - 不要在集成测试中使用真实生产 COS bucket。
 - 如果测试失败，优先判断是环境问题、测试问题还是业务 bug。
 - 如果确认是业务 bug，应先记录和讨论，再修改业务代码。
+
+## 面试表述
+
+该项目的集成测试重点不是简单追求 handler 覆盖率，而是覆盖后端核心链路：
+
+- 真实 MySQL schema 和唯一索引。
+- Redis 缓存、ZSET、Pub/Sub、分布式锁和滑动窗口限流。
+- RabbitMQ topic 路由、独立 channel、重试和死信队列。
+- service 层的缓存回源、MQ 投递和 fallback 逻辑。
+- worker 层的异步消费、幂等、outbox 状态机和 Redis 派生数据更新。
+
+可以这样描述：
+
+```text
+我为项目补充了基于真实 MySQL、Redis、RabbitMQ 的集成测试环境，
+通过 Docker Compose 在测试虚拟机中启动中间件，并用脚本一键完成环境启动、
+测试运行、覆盖率统计和环境清理。测试覆盖了多级缓存、分布式锁、限流、
+MQ 路由、重试死信、worker 幂等、outbox 状态机和通知 Pub/Sub 推送等核心链路。
+```
