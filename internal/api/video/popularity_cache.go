@@ -24,7 +24,7 @@ func UpdatePopularityCache(ctx context.Context, cache *rediscache.Client, id uin
 	member := strconv.FormatUint(uint64(id), 10)
 	cacheCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
 	defer cancel()
-	// 根据exchange更改zset排行榜中该视频的score
+	// 根据change更改zset排行榜中该视频的score
 	cache.ZIncrBy(cacheCtx, windowKey, member, float64(change))
 	// 给该zset设置/重置过期时间
 	cache.Expire(cacheCtx, windowKey, 2*time.Hour)

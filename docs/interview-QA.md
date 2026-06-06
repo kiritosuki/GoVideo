@@ -523,7 +523,56 @@ NotificationWorker 消费，写 notifications 表，并推送 SSE
 
 Outbox 的做法是：在同一个 MySQL 事务里写 videos 和 outbox 消息。事务成功后，OutboxWorker 后台扫描 outbox 表，把 pending 消息投递到 MQ。这样至少能保证“只要视频写入成功，就一定有一条待投递消息留在数据库里”。
 
-### Q47：Outbox 状态机怎么设计？
+### Q47：为什么视频发布用了 Outbox，而不是直接投递 MQ？
+
+回答：
+
+因为视频发布和点赞、关注这类操作的接口语义不一样。
+
+点赞、关注这类接口通常只需要告诉前端“操作已接收”或“操作成功”，前端不强依赖后端立刻返回一个新资源 ID。所以这类操作可以更容易地异步化：API 投递 MQ，worker 后台消费写库；MQ 不可用时再走同步 fallback。
+
+但视频发布接口不一样。用户发布视频后，前端通常需要立刻拿到确定的视频 ID、作者信息、播放 URL、封面 URL、发布时间等数据，用于跳转详情页、展示发布结果或更新个人主页。如果 API 什么都不写库，只投递一条 MQ，让 worker 后台再插入 videos 表，那么接口返回的语义就会变成：
+
+```text
+/video/publish 返回成功
+= 发布请求已接收
+≠ 视频已经发布成功
+≠ 数据库里已经有 video_id
+```
+
+这样前端拿不到确定的 video_id，后端还需要额外设计 task_id、发布状态表、轮询接口或通知机制来告诉用户视频到底有没有发布成功。
+
+所以当前项目选择让视频发布的主业务同步完成：API 请求内直接写入 videos 表、标签关系，并返回确定的视频对象。时间线更新属于发布成功后的派生事件，再通过 Outbox 异步投递给 TimelineWorker。
+
+这时 Outbox 解决的是“主业务已成功，但派生事件不能丢”的问题。如果直接写库后发 MQ，会出现一个典型一致性问题：
+
+```text
+1. videos 表插入成功
+2. MQ 投递失败，或者投递前进程崩溃
+3. MySQL 里已经有视频，但 Redis Feed 时间线永远没有这条视频
+```
+
+如果反过来先投 MQ 再写 MySQL，也会有另一个问题：
+
+```text
+1. MQ 投递成功
+2. videos 表插入失败
+3. TimelineWorker 消费到一个不存在的视频 ID
+```
+
+所以视频发布使用 Outbox：在同一个 MySQL 事务里同时插入 `videos` 和 `outbox_msgs`。只要事务提交成功，就说明视频主数据和待投递事件都已经落库。即使 RabbitMQ 当时不可用，outbox 消息也不会丢，后续 OutboxWorker 可以继续扫描并重试投递。
+
+所以这和点赞、评论、关注不完全一样。点赞、评论、关注更容易接受异步最终一致，接口不需要返回新创建资源的完整 ID；视频发布则需要同步确认主资源已经创建成功，并立刻返回 video_id 和 URL 等数据。
+
+但视频发布后的 timeline 更新属于短视频系统的核心展示链路。视频主数据已经写入 MySQL 后，如果“更新时间线”的消息丢失，就可能出现数据库中存在视频，但全局 Feed 时间线里没有这条视频，用户刷 Feed 看不到新发布的视频。Redis timeline 为空时可以从 MySQL 重建，但如果只是局部缺失某一条视频，不一定能自动发现和自愈。
+
+所以我对视频发布使用 Outbox，把“视频已发布，需要更新时间线”这个事件和视频主数据放在同一个 MySQL 事务中提交。这样后续即使 MQ、Redis 或 worker 短暂失败，也可以通过 outbox 状态机继续重试和补偿。
+
+面试时可以总结成一句话：
+
+> 点赞、关注这类操作可以只返回操作结果，适合直接异步化；视频发布需要立刻返回确定的 video_id 和资源 URL，所以我同步完成视频主数据入库，再用 Outbox 保证“更新时间线”这个派生事件可靠投递。
+
+### Q48：Outbox 状态机怎么设计？
 
 回答：
 
@@ -538,7 +587,7 @@ failed：超过重试次数，失败留库
 
 OutboxWorker 扫描 pending 消息，先通过条件更新把 pending 改成 processing，抢占成功后投递 MQ。投递成功改成 published，失败就 retry_count +1，未超过 3 次改回 pending，超过后改成 failed。
 
-### Q48：分布式下多个 OutboxWorker 会不会抢同一条消息？
+### Q49：分布式下多个 OutboxWorker 会不会抢同一条消息？
 
 回答：
 
@@ -552,13 +601,13 @@ WHERE id = ? AND status = 'pending'
 
 只有 RowsAffected=1 的节点处理这条消息，其他节点 RowsAffected=0，会放弃。
 
-### Q49：processing 状态的消息卡住怎么办？
+### Q50：processing 状态的消息卡住怎么办？
 
 回答：
 
 如果 worker 抢占成功后崩溃，消息可能一直停在 processing。为了解决这个问题，OutboxWorker 每次扫描前会把 updated_at 超过 5 分钟的 processing 消息重置为 pending，让其他节点重新抢占处理。
 
-### Q50：Outbox 能保证 exactly-once 吗？
+### Q51：Outbox 能保证 exactly-once 吗？
 
 回答：
 
@@ -566,7 +615,7 @@ WHERE id = ? AND status = 'pending'
 
 当前下游 timeline 用 Redis ZSet，member 是 videoID，重复 ZADD 不会产生重复视频，所以可以接受。如果下游不能容忍重复，就需要在下游做更严格的 event_id 幂等。
 
-### Q51：为什么不让 OutboxWorker 直接更新 Redis，还要投 MQ？
+### Q52：为什么不让 OutboxWorker 直接更新 Redis，还要投 MQ？
 
 回答：
 
@@ -576,7 +625,7 @@ WHERE id = ? AND status = 'pending'
 
 ## 9. worker 幂等
 
-### Q52：点赞 worker 怎么保证幂等？
+### Q53：点赞 worker 怎么保证幂等？
 
 回答：
 
@@ -584,7 +633,7 @@ likes 表对 video_id 和 account_id 建唯一索引。LikeWorker 插入点赞�
 
 取消点赞是硬删除，只有 RowsAffected > 0 才扣减点赞数，重复删除不会重复扣减。
 
-### Q53：评论 worker 怎么保证幂等？
+### Q54：评论 worker 怎么保证幂等？
 
 回答：
 
@@ -592,25 +641,25 @@ likes 表对 video_id 和 account_id 建唯一索引。LikeWorker 插入点赞�
 
 重复消费同一个事件时，插入 comments 会触发 duplicate，worker 直接返回 nil 并 ack 消息，不会重复创建评论，也不会重复增加热度。
 
-### Q54：关注 worker 怎么保证幂等？
+### Q55：关注 worker 怎么保证幂等？
 
 回答：
 
 socials 表对 follower_id 和 vlogger_id 建唯一索引。重复关注会 duplicate，worker 忽略即可。取消关注是硬删除，重复删除不影响最终结果。
 
-### Q55：通知 worker 怎么保证幂等？
+### Q56：通知 worker 怎么保证幂等？
 
 回答：
 
 notifications 表有 event_id 唯一索引。NotificationWorker 根据点赞、评论、关注事件构造通知时，会沿用事件的 event_id。重复消费时插入通知表 duplicate，直接返回 nil，避免重复通知入库。
 
-### Q56：TimelineWorker 怎么保证幂等？
+### Q57：TimelineWorker 怎么保证幂等？
 
 回答：
 
 TimelineWorker 更新 Redis ZSet，member 是 videoID。ZSet 的 member 唯一，同一个 videoID 重复 ZADD 不会产生多条 Feed 记录，只会覆盖 score。因此 timeline 重复消息不会让 Feed 出现重复视频。
 
-### Q57：PopularityWorker 为什么没做严格幂等？
+### Q58：PopularityWorker 为什么没做严格幂等？
 
 回答：
 
@@ -620,7 +669,7 @@ TimelineWorker 更新 Redis ZSet，member 是 videoID。ZSet 的 member 唯一�
 
 ## 10. SSE 通知推送
 
-### Q58：SSE 是怎么工作的？
+### Q59：SSE 是怎么工作的？
 
 回答：
 
@@ -628,7 +677,7 @@ SSE 是 Server-Sent Events，本质是一个 HTTP 长连接。客户端建立连
 
 我的 SSEHandler 会为当前用户创建一个 channel，放入 SSEHub 的 `map[userID][]channel` 中。NotificationWorker 或 Subscriber 调用 hub.Push 时，会把通知写入对应用户的 channel，SSEHandler 从 channel 读到消息后写回客户端。
 
-### Q59：为什么用 SSE，不用 WebSocket？
+### Q60：为什么用 SSE，不用 WebSocket？
 
 回答：
 
@@ -636,13 +685,13 @@ SSE 是 Server-Sent Events，本质是一个 HTTP 长连接。客户端建立连
 
 WebSocket 更适合双向实时通信，比如聊天、在线协作、游戏。如果后续做实时聊天，可以考虑 WebSocket。
 
-### Q60：SSEHandler 里为什么是 for 循环阻塞？
+### Q61：SSEHandler 里为什么是 for 循环阻塞？
 
 回答：
 
 这是 SSE 的正常工作方式。SSE 是长连接，Handler 处理这个 HTTP 请求时不会立即返回，而是在请求 goroutine 中循环等待通知、写入响应流。如果客户端断开，请求 context 会取消，Handler 退出并取消订阅。
 
-### Q61：分布式部署下 SSE 有什么问题？
+### Q62：分布式部署下 SSE 有什么问题？
 
 回答：
 
@@ -650,7 +699,7 @@ SSEHub 是每个 API 节点自己的本地内存连接表。如果用户连接�
 
 所以多节点下不能让 worker 直接依赖某一个本地 SSEHub。
 
-### Q62：你如何解决分布式通知推送？
+### Q63：你如何解决分布式通知推送？
 
 回答：
 
@@ -658,7 +707,7 @@ SSEHub 是每个 API 节点自己的本地内存连接表。如果用户连接�
 
 只有真正持有目标用户 SSE 连接的节点能推送成功；其他节点没有这个用户的连接，hub.Push 会直接返回，不会积压。
 
-### Q63：所有节点都收到 Pub/Sub 消息，会不会重复推给用户？
+### Q64：所有节点都收到 Pub/Sub 消息，会不会重复推给用户？
 
 回答：
 
@@ -666,7 +715,7 @@ SSEHub 是每个 API 节点自己的本地内存连接表。如果用户连接�
 
 如果用户打开多个标签页，同一个节点或多个节点上可能有多个 SSE 连接，这时每个连接收到通知是合理的。
 
-### Q64：用户离线时通知会丢吗？
+### Q65：用户离线时通知会丢吗？
 
 回答：
 
@@ -674,7 +723,7 @@ SSEHub 是每个 API 节点自己的本地内存连接表。如果用户连接�
 
 ## 11. COS 对象存储
 
-### Q65：为什么接入 COS？
+### Q66：为什么接入 COS？
 
 回答：
 
@@ -682,13 +731,13 @@ SSEHub 是每个 API 节点自己的本地内存连接表。如果用户连接�
 
 所以我把视频、封面、头像迁移到腾讯云 COS。API 只负责临时接收和上传文件，最终数据库保存 COS URL，所有节点都能访问同一份资源。
 
-### Q66：上传流程是什么？
+### Q67：上传流程是什么？
 
 回答：
 
 前端 multipart 上传文件到 API，API 校验文件大小和后缀，然后保存到 `.run/uploads/...` 临时路径。接着调用 COS SDK 的 UploadFile 上传，上传成功后删除本地临时文件，并返回 COS URL。
 
-### Q67：为什么先落盘，不直接流式上传？
+### Q68：为什么先落盘，不直接流式上传？
 
 回答：
 
@@ -698,7 +747,7 @@ SSEHub 是每个 API 节点自己的本地内存连接表。如果用户连接�
 
 ## 12. 降级与稳定性
 
-### Q68：Redis 故障时系统还能用吗？
+### Q69：Redis 故障时系统还能用吗？
 
 回答：
 
@@ -706,7 +755,7 @@ SSEHub 是每个 API 节点自己的本地内存连接表。如果用户连接�
 
 受影响最大的是分布式 SSE 实时推送，因为跨节点广播依赖 Redis Pub/Sub。Redis 不可用时会降级本节点 hub.Push，单节点可靠，多节点不完全可靠。但通知已经入库，用户可以拉取历史通知。
 
-### Q69：RabbitMQ 故障时怎么办？
+### Q70：RabbitMQ 故障时怎么办？
 
 回答：
 
@@ -714,7 +763,7 @@ API 层对点赞、评论、关注等核心写操作做了同步 fallback。MQ �
 
 但 worker 异步能力会受影响，比如通知异步生成、时间线派生更新、热度更新会受影响。worker 进程本身强依赖 RabbitMQ，异常时退出，由 Docker 或 Kubernetes 重启。
 
-### Q70：MySQL 故障怎么办？
+### Q71：MySQL 故障怎么办？
 
 回答：
 
@@ -722,7 +771,7 @@ MySQL 是主数据源，当前系统强依赖 MySQL。Redis 和 RabbitMQ 的降�
 
 生产环境需要 MySQL 高可用、备份恢复、主从复制、读写分离等方案。当前项目作为简历项目主要做了 Redis 和 MQ 的降级，MySQL 高可用是后续生产化方向。
 
-### Q71：COS 故障怎么办？
+### Q72：COS 故障怎么办？
 
 回答：
 
@@ -732,7 +781,7 @@ COS 对上传接口是强依赖。COS 不可用时，视频、封面、头像上
 
 ## 13. 性能压测
 
-### Q72：你做过性能压测吗？
+### Q73：你做过性能压测吗？
 
 回答：
 
@@ -740,7 +789,7 @@ COS 对上传接口是强依赖。COS 不可用时，视频、封面、头像上
 
 测试脚本会通过 Docker Compose 启动 MySQL、Redis、RabbitMQ，然后本地启动 API 和 worker，再执行 k6 压测，输出 QPS、P95/P99 延迟和错误率。
 
-### Q73：性能压测重点关注哪些指标？
+### Q74：性能压测重点关注哪些指标？
 
 回答：
 
@@ -752,7 +801,7 @@ COS 对上传接口是强依赖。COS 不可用时，视频、封面、头像上
 
 系统层面关注 CPU、内存、网络、数据库连接数、Redis 内存、RabbitMQ queue depth。
 
-### Q74：QPS 多少？
+### Q75：QPS 多少？
 
 回答：
 
@@ -762,7 +811,7 @@ COS 对上传接口是强依赖。COS 不可用时，视频、封面、头像上
 
 后来我把默认压测改温和，使用更合理的 VUS、duration 和 sleep，并增加脚本间冷却、失败后停止后续脚本。面试时我会强调这个压测主要用于发现瓶颈和比较优化前后差异，而不是声称线上 QPS。
 
-### Q75：如果要正式压测，你会怎么设计？
+### Q76：如果要正式压测，你会怎么设计？
 
 回答：
 
@@ -776,7 +825,7 @@ COS 对上传接口是强依赖。COS 不可用时，视频、封面、头像上
 
 第五，压测结束后分析瓶颈，比如是 Redis、MySQL、MQ、网络还是 API CPU。
 
-### Q76：压测中发现了什么问题？
+### Q77：压测中发现了什么问题？
 
 回答：
 
@@ -786,7 +835,7 @@ COS 对上传接口是强依赖。COS 不可用时，视频、封面、头像上
 
 ## 14. 完整业务链路
 
-### Q77：讲一下用户注册登录的全过程。
+### Q78：讲一下用户注册登录的全过程。
 
 回答：
 
@@ -794,7 +843,7 @@ COS 对上传接口是强依赖。COS 不可用时，视频、封面、头像上
 
 后续访问受保护接口时，请求头带 Bearer token。后端先解析 JWT，再去 Redis 或 MySQL 校验这个 token 是否是当前有效 token，校验通过后把 accountID 和 username 写入 Gin Context。
 
-### Q78：讲一下发布视频的全过程。
+### Q79：讲一下发布视频的全过程。
 
 回答：
 
@@ -804,7 +853,7 @@ COS 对上传接口是强依赖。COS 不可用时，视频、封面、头像上
 
 OutboxWorker 后台扫描 pending 消息，抢占为 processing，投递 timeline MQ。TimelineWorker 消费后把 videoID 写入 Redis 的 `feed:global_timeline` ZSet。这样新视频就能出现在最新 Feed 流里。
 
-### Q79：讲一下刷最新 Feed 的全过程。
+### Q80：讲一下刷最新 Feed 的全过程。
 
 回答：
 
@@ -814,7 +863,7 @@ OutboxWorker 后台扫描 pending 消息，抢占为 processing，投递 timelin
 
 热数据从 Redis ZSet 按 score 倒序取 videoID，再走 GetVideosByIDs，通过本地缓存、Redis、MySQL 获取视频实体。如果热数据不足一页，再从 MySQL 拼接冷数据。最后批量查询当前用户是否点赞过这些视频，组装 FeedVideoItem 返回。
 
-### Q80：讲一下热门榜全过程。
+### Q81：讲一下热门榜全过程。
 
 回答：
 
@@ -824,7 +873,7 @@ OutboxWorker 后台扫描 pending 消息，抢占为 processing，投递 timelin
 
 Redis 不可用时，降级 MySQL，按 popularity、create_time、id 排序和游标分页。
 
-### Q81：讲一下点赞全过程。
+### Q82：讲一下点赞全过程。
 
 回答：
 
@@ -834,7 +883,7 @@ like.events queue 的 LikeWorker 消费后，检查视频是否存在，插入 l
 
 notification.like queue 也会收到 like.like 事件，NotificationWorker 消费后给视频作者生成通知。
 
-### Q82：讲一下评论全过程。
+### Q83：讲一下评论全过程。
 
 回答：
 
@@ -844,7 +893,7 @@ CommentWorker 消费 comment.events queue，检查视频存在后插入 comments
 
 NotificationWorker 也会消费 comment.publish 事件，为视频作者生成评论通知。
 
-### Q83：讲一下关注全过程。
+### Q84：讲一下关注全过程。
 
 回答：
 
@@ -852,7 +901,7 @@ NotificationWorker 也会消费 comment.publish 事件，为视频作者生成�
 
 NotificationWorker 同时消费 social.follow 事件，给被关注者生成通知。
 
-### Q84：讲一下消息通知全过程。
+### Q85：讲一下消息通知全过程。
 
 回答：
 
@@ -864,7 +913,7 @@ NotificationWorker 同时消费 social.follow 事件，给被关注者生成通�
 
 ## 15. 分布式扩展
 
-### Q85：你做了哪些分布式扩展？
+### Q86：你做了哪些分布式扩展？
 
 回答：
 
@@ -880,13 +929,13 @@ NotificationWorker 同时消费 social.follow 事件，给被关注者生成通�
 
 第六，RabbitMQ 同一队列多消费者天然竞争消费，可以横向扩展 worker。
 
-### Q86：多 worker 消费同一个队列会不会重复消费同一条消息？
+### Q87：多 worker 消费同一个队列会不会重复消费同一条消息？
 
 回答：
 
 RabbitMQ 同一个队列下的多个消费者是竞争消费，一条消息正常只会投递给其中一个消费者。但由于消费失败、连接断开、ack 丢失等情况，消息仍可能重新投递，所以业务层仍然要做幂等。
 
-### Q87：分布式下还有哪些不足？
+### Q88：分布式下还有哪些不足？
 
 回答：
 
@@ -898,7 +947,7 @@ RabbitMQ 和 Redis 也需要高可用部署、监控和报警。死信队列目�
 
 ## 16. 项目难点与取舍
 
-### Q88：这个项目最大的难点是什么？
+### Q89：这个项目最大的难点是什么？
 
 回答：
 
@@ -908,7 +957,7 @@ RabbitMQ 和 Redis 也需要高可用部署、监控和报警。死信队列目�
 
 这些点都涉及“业务正确性、性能和分布式部署”的平衡。
 
-### Q89：你觉得项目最有技术含量的点是什么？
+### Q90：你觉得项目最有技术含量的点是什么？
 
 回答：
 
@@ -916,7 +965,7 @@ RabbitMQ 和 Redis 也需要高可用部署、监控和报警。死信队列目�
 
 另一个亮点是 Feed 的冷热数据和多级缓存设计，能解释清楚为什么 Redis 只存热数据、怎么防缓存击穿、怎么稳定分页。
 
-### Q90：如果让你继续优化，你会优先做什么？
+### Q91：如果让你继续优化，你会优先做什么？
 
 回答：
 
@@ -930,37 +979,37 @@ RabbitMQ 和 Redis 也需要高可用部署、监控和报警。死信队列目�
 
 ## 17. 简历追问快答
 
-### Q91：一句话讲多级缓存。
+### Q92：一句话讲多级缓存。
 
 回答：
 
 Feed 视频实体走本地缓存、Redis、MySQL 三级缓存；视频详情用 Redis 缓存和分布式锁防击穿；Redis 不可用时降级 MySQL。
 
-### Q92：一句话讲 Outbox。
+### Q93：一句话讲 Outbox。
 
 回答：
 
 视频发布时在同一个 MySQL 事务中写 videos 和 outbox pending 消息，再由 OutboxWorker 后台投递 MQ，解决本地事务和消息投递不一致问题。
 
-### Q93：一句话讲 MQ 幂等。
+### Q94：一句话讲 MQ 幂等。
 
 回答：
 
 我不依赖 MQ exactly-once，而是在消费端用唯一索引、event_id 和 Redis ZSet member 唯一性处理重复消费。
 
-### Q94：一句话讲 SSE 分布式推送。
+### Q95：一句话讲 SSE 分布式推送。
 
 回答：
 
 NotificationWorker 写通知表后发布 Redis Pub/Sub，所有 API 节点订阅并调用本地 SSEHub，只有持有目标用户连接的节点真正推送。
 
-### Q95：一句话讲热门榜。
+### Q96：一句话讲热门榜。
 
 回答：
 
 热门榜用 Redis 分钟级 ZSet 记录热度变化，查询时合并最近 60 分钟窗口形成临时榜，Redis 不可用时降级 MySQL popularity 游标查询。
 
-### Q96：一句话讲项目不足。
+### Q97：一句话讲项目不足。
 
 回答：
 
