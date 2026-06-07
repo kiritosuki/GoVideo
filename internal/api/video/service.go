@@ -10,13 +10,15 @@ import (
 
 	"github.com/kiritosuki/GoVideo/internal/api/tag"
 	rediscache "github.com/kiritosuki/GoVideo/internal/middleware/redis"
+	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 )
 
 type VideoService struct {
-	videoRepo *VideoRepo
-	cache     *rediscache.Client
-	cacheTTL  time.Duration
+	videoRepo    *VideoRepo
+	cache        *rediscache.Client
+	cacheTTL     time.Duration
+	requestGroup singleflight.Group
 }
 
 func NewVideoService(videoRepo *VideoRepo, cache *rediscache.Client) *VideoService {
@@ -96,37 +98,36 @@ func (s *VideoService) ListByAuthorID(ctx context.Context, authorID uint) ([]Vid
 
 // GetDetail 根据id获取视频详细信息
 func (s *VideoService) GetDetail(ctx context.Context, id uint) (*Video, error) {
-	// 从redis缓存中查询视频的函数
-	getCacheFunc := func() (*Video, bool) {
-		key := s.cache.Key("video:detail:id=%d", id)
-		cacheCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
-		bytes, err := s.cache.GetBytes(cacheCtx, key)
-		cancel()
-		if err != nil {
-			return nil, false
-		}
-		var video Video
-		if err := json.Unmarshal(bytes, &video); err != nil {
-			return nil, false
-		}
-		return &video, true
-	}
-	// 添加redis缓存视频的函数
-	setCacheFunc := func(video *Video) {
-		key := s.cache.Key("video:detail:id=%d", id)
-		bytes, err := json.Marshal(video)
-		if err != nil {
-			return
-		}
-		cacheCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
-		s.cache.SetBytes(cacheCtx, key, bytes, s.cacheTTL)
-		cancel()
-	}
 	// 若redis缓存启用了
 	if s.cache != nil {
+		cacheKey := s.cache.Key("video:detail:id=%d", id)
+		// 从redis缓存中查询视频的函数
+		getCacheFunc := func() (*Video, bool) {
+			cacheCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+			bytes, err := s.cache.GetBytes(cacheCtx, cacheKey)
+			cancel()
+			if err != nil {
+				return nil, false
+			}
+			var video Video
+			if err := json.Unmarshal(bytes, &video); err != nil {
+				return nil, false
+			}
+			return &video, true
+		}
+		// 添加redis缓存视频的函数
+		setCacheFunc := func(video *Video) {
+			bytes, err := json.Marshal(video)
+			if err != nil {
+				return
+			}
+			cacheCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+			s.cache.SetBytes(cacheCtx, cacheKey, bytes, s.cacheTTL)
+			cancel()
+		}
 		// 先尝试从redis缓存中查询视频
 		cacheCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
-		bytes, err := s.cache.GetBytes(cacheCtx, s.cache.Key("video:detail:id=%d", id))
+		bytes, err := s.cache.GetBytes(cacheCtx, cacheKey)
 		cancel()
 		if err == nil {
 			// 若缓存存在
@@ -135,57 +136,83 @@ func (s *VideoService) GetDetail(ctx context.Context, id uint) (*Video, error) {
 				return &cached, nil
 			}
 		} else if rediscache.IsMiss(err) {
-			// 若缓存未命中 多协程竞争分布式锁
-			lockKey := s.cache.Key("lock:video:detail:id=%d", id)
-			lockCtx, lockCancel := context.WithTimeout(ctx, 50*time.Millisecond)
-			token, ok, err := s.cache.Lock(lockCtx, lockKey, 2*time.Second)
-			lockCancel()
-			if err == nil && ok {
-				// 如果抢到了锁 查询数据库并回写缓存
-				defer func() {
-					s.cache.Unlock(context.Background(), lockKey, token)
-				}()
-				// 先再次查询缓存 缓存未命中与抢到锁的时间窗口内 可能缓存已经被其他协程写入
+			// 若缓存未命中 先用singleflight合并本进程内的重复请求
+			// 合并后的请求再竞争redis分布式锁 保护多节点下的缓存重建
+			sfKey := s.cache.Key("sf:video:detail:id=%d", id)
+			v, err, _ := s.requestGroup.Do(sfKey, func() (interface{}, error) {
+				// 进入singleflight后再次查询缓存 避免等待期间已有请求回写缓存
 				if cached, ok := getCacheFunc(); ok {
 					return cached, nil
 				}
-				// 查询数据库
-				video, err := s.videoRepo.FindByID(ctx, id)
-				if err != nil {
-					return nil, err
+
+				lockKey := s.cache.Key("lock:video:detail:id=%d", id)
+				lockCtx, lockCancel := context.WithTimeout(ctx, 50*time.Millisecond)
+				token, locked, lockErr := s.cache.Lock(lockCtx, lockKey, 2*time.Second)
+				lockCancel()
+				if lockErr != nil {
+					// redis锁异常时不再等待缓存回填 直接降级查询数据库
+					video, err := s.videoRepo.FindByID(ctx, id)
+					if err != nil {
+						return nil, err
+					}
+					setCacheFunc(video)
+					return video, nil
 				}
-				// 回写缓存
-				setCacheFunc(video)
-				// 返回
-				return video, nil
-			} else {
-				// 如果没有抢到锁 反复查询缓存 等待其他协程写入缓存
+				if lockErr == nil && locked {
+					// 如果抢到了锁 查询数据库并回写缓存
+					defer func() {
+						s.cache.Unlock(context.Background(), lockKey, token)
+					}()
+					// 抢到锁后再次查询缓存 避免锁竞争期间其他节点已经回写缓存
+					if cached, ok := getCacheFunc(); ok {
+						return cached, nil
+					}
+					video, err := s.videoRepo.FindByID(ctx, id)
+					if err != nil {
+						return nil, err
+					}
+					setCacheFunc(video)
+					return video, nil
+				}
+
+				// 如果没有抢到锁 反复查询缓存 等待其他请求/节点回写缓存
 				for i := 0; i < 5; i++ {
 					select {
 					case <-ctx.Done():
 						return nil, ctx.Err()
 					case <-time.After(20 * time.Millisecond):
 					}
-					// 每次隔20ms尝试查询一次缓存
 					if video, ok := getCacheFunc(); ok {
 						return video, nil
 					}
 				}
-				// 若20 * 5 = 100ms内没查询到缓存 则降级去数据库查询
+
+				// 若20 * 5 = 100ms内没查询到缓存 则降级查询数据库并尝试回写缓存
+				video, err := s.videoRepo.FindByID(ctx, id)
+				if err != nil {
+					return nil, err
+				}
+				setCacheFunc(video)
+				return video, nil
+			})
+			if err != nil {
+				return nil, err
 			}
+			if video, ok := v.(*Video); ok {
+				return video, nil
+			}
+			return nil, errors.New("unexpected video detail singleflight result")
 		} // 其他err即为redis宕机 正常查询数据库即可
-	}
-	// 查询数据库
-	video, err := s.videoRepo.FindByID(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	// 如果redis缓存启用了 回写缓存
-	if s.cache != nil {
+		// redis缓存内容异常时 直接降级查询数据库并回写缓存
+		video, err := s.videoRepo.FindByID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
 		setCacheFunc(video)
+		return video, nil
 	}
-	// 返回
-	return video, nil
+	// redis未启用 直接查询数据库
+	return s.videoRepo.FindByID(ctx, id)
 }
 
 /* 辅助函数 */

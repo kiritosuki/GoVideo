@@ -32,7 +32,7 @@ Worker 进程：消费 MQ、更新 DB、更新 Redis 派生数据
 
 第一是 Feed 流不是简单查表，而是把最新流拆成 Redis 热数据和 MySQL 冷数据，Redis ZSet 只维护最新 1000 条时间线，冷数据从 MySQL 分页查询。
 
-第二是多级缓存，视频实体查询走本地缓存、Redis、MySQL，视频详情用 Redis 分布式锁和短暂轮询避免缓存击穿。
+第二是多级缓存，视频实体查询走本地缓存、Redis、MySQL，视频详情用 singleflight + Redis 分布式锁避免缓存击穿。
 
 第三是消息队列异步化，点赞、评论、关注、热度更新、通知生成、时间线更新都通过 RabbitMQ 和 worker 解耦。
 
@@ -287,7 +287,7 @@ Redis ZSet 为空可能是 Redis 重启、缓存被清理或者系统冷启动�
 
 回答：
 
-视频详情缓存 miss 时，我用 Redis 分布式锁。抢到锁的请求查 MySQL 并回写缓存，没抢到锁的请求短暂等待缓存回写，每 20ms 查一次，最多 5 次。等不到再降级查 MySQL。
+视频详情缓存 miss 时，我先用 singleflight 合并本进程内同一个 videoID 的重复请求，合并后的代表请求再去竞争 Redis 分布式锁。抢到锁的请求查 MySQL 并回写缓存，没抢到锁的请求短暂等待缓存回写，每 20ms 查一次，最多 5 次。等不到再降级查 MySQL。
 
 Feed 批量视频实体查询中，对同一个 videoID 的 MySQL 查询使用 singleflight 合并，避免同一瞬间大量协程查同一个视频。
 
@@ -325,8 +325,8 @@ Feed 批量视频实体查询中，对同一个 videoID 的 MySQL 查询使用 s
 
 ```text
 VideoService.GetDetail：
-  使用 Redis 分布式锁
-  解决多个 API 节点同时查同一个视频详情导致的缓存击穿
+  使用 singleflight + Redis 分布式锁
+  先合并本进程内重复请求 再竞争跨节点分布式锁
 
 FeedService.ListByFollowing：
   使用 Redis 分布式锁
@@ -341,13 +341,13 @@ FeedService.ListLatest：
   合并本进程内 Redis timeline 重建、冷数据查询、冷热拼接查询
 ```
 
-具体来说，`/video/getDetail` 是用户可能高频访问的详情接口。如果某个热门视频的 Redis 缓存失效，多台 API 节点可能同时收到请求，所以这里用了 Redis 分布式锁：
+具体来说，`/video/getDetail` 是用户可能高频访问的详情接口。如果某个热门视频的 Redis 缓存失效，同一个 API 节点内可能有大量请求同时 miss，多台 API 节点之间也可能同时 miss。所以这里先用 singleflight 合并本进程内重复请求，再让合并后的代表请求竞争 Redis 分布式锁：
 
 ```text
 lock:video:detail:id={videoID}
 ```
 
-抢到锁的请求查 MySQL 并回写 Redis；没抢到锁的请求每 20ms 查一次缓存，最多等 5 次；如果还是等不到，就降级查 MySQL，保证接口可用。
+抢到锁的请求查 MySQL 并回写 Redis；没抢到锁的请求每 20ms 查一次缓存，最多等 5 次；如果还是等不到，就降级查 MySQL，保证接口可用。这样既减少同节点内大量请求同时抢 Redis 锁，也减少多节点同时回源 MySQL。
 
 `ListByFollowing` 也用了 Redis 分布式锁。因为关注 Feed 的响应缓存 key 和用户、limit、cursor 有关，如果多个节点同时 miss 同一个关注列表缓存，抢到锁的节点查 MySQL 并回写缓存，其他节点等待缓存或降级查 MySQL。
 
@@ -361,11 +361,11 @@ lock:video:detail:id={videoID}
 3. 热数据不足一页时，合并冷热拼接中的 MySQL 查询
 ```
 
-需要注意的是，singleflight 只能合并当前进程内的并发请求，不能跨 API 节点。所以在项目里，如果是明确的跨节点缓存击穿风险，比如视频详情和关注 Feed，就使用 Redis 分布式锁；如果是局部查询合并，或者每个 ID 都加分布式锁成本太高，就使用 singleflight。
+需要注意的是，singleflight 只能合并当前进程内的并发请求，不能跨 API 节点。所以视频详情这种明确热点 key 采用 singleflight + Redis 分布式锁组合；关注 Feed 当前使用 Redis 分布式锁；Feed 批量实体和冷数据查询则使用 singleflight 做轻量合并。
 
 面试时可以总结成一句话：
 
-> singleflight 解决单进程内的重复工作，Redis 分布式锁解决多节点之间的重复工作。能用 singleflight 的地方优先用它，涉及跨节点缓存击穿时才用分布式锁。
+> singleflight 解决单进程内的重复工作，Redis 分布式锁解决多节点之间的重复工作。视频详情这种明确热点 key 可以组合使用，先 singleflight 减少本机锁竞争，再用 Redis 锁控制跨节点回源。
 
 ## 6. 热门榜
 
@@ -983,7 +983,7 @@ RabbitMQ 和 Redis 也需要高可用部署、监控和报警。死信队列目�
 
 回答：
 
-Feed 视频实体走本地缓存、Redis、MySQL 三级缓存；视频详情用 Redis 缓存和分布式锁防击穿；Redis 不可用时降级 MySQL。
+Feed 视频实体走本地缓存、Redis、MySQL 三级缓存；视频详情用 singleflight + Redis 分布式锁防击穿；Redis 不可用时降级 MySQL。
 
 ### Q93：一句话讲 Outbox。
 

@@ -344,9 +344,10 @@ end
 
 ```text
 视频详情缓存 miss
-只有一个请求抢到 lock:video:detail:id={id}
+先用 singleflight 合并本进程内同一个 videoID 的重复请求
+合并后的代表请求再竞争 lock:video:detail:id={id}
 抢到锁的请求查 MySQL 并回写缓存
-其他请求短暂等待缓存回填
+没抢到锁的请求短暂等待缓存回填
 等待失败再降级查 MySQL
 ```
 
@@ -495,16 +496,22 @@ v, err, _ := s.requestGroup.Do(sfKey, func() (interface{}, error) {
 ```text
 1. Redis 可用时先查 video:detail:id={id}
 2. 命中直接返回
-3. Redis miss 时尝试抢分布式锁
-4. 抢到锁：双查缓存 -> 查 MySQL -> 回写 Redis -> 返回
-5. 没抢到锁：每 20ms 查一次缓存，最多 5 次
-6. 等不到缓存则降级查 MySQL
-7. Redis 故障时直接查 MySQL
+3. Redis miss 时进入 singleflight 合并本进程内重复请求
+4. 合并后的代表请求尝试抢 Redis 分布式锁
+5. 抢到锁：双查缓存 -> 查 MySQL -> 回写 Redis -> 返回
+6. 没抢到锁：每 20ms 查一次缓存，最多 5 次
+7. 等不到缓存则降级查 MySQL
+8. Redis 故障时直接查 MySQL
 ```
 
 关键代码：
 
 ```go
+v, err, _ := s.requestGroup.Do(sfKey, func() (interface{}, error) {
+    if cached, ok := getCacheFunc(); ok {
+        return cached, nil
+    }
+
 token, ok, err := s.cache.Lock(lockCtx, lockKey, 2*time.Second)
 if err == nil && ok {
     defer s.cache.Unlock(context.Background(), lockKey, token)
@@ -515,6 +522,8 @@ if err == nil && ok {
     setCacheFunc(video)
     return video, nil
 }
+    // 没抢到锁则等待缓存回填，超时后降级查 MySQL
+})
 ```
 
 为什么抢到锁后还要再次查缓存？
@@ -1793,7 +1802,7 @@ VUS=20 且无 sleep，不是 20 QPS，而是 20 个虚拟用户疯狂循环
 
 ### 21.2 多级缓存怎么防击穿？
 
-> 视频详情 miss 时用 Redis 分布式锁，抢到锁的请求查 MySQL 并回写缓存，没抢到锁的请求短暂轮询缓存，轮询失败后才降级查库。Feed 批量实体查询用本地缓存、Redis MGet、MySQL，并用 singleflight 合并同一视频 ID 的并发查库。
+> 视频详情 miss 时先用 singleflight 合并本进程内重复请求，再让代表请求竞争 Redis 分布式锁。抢到锁的请求查 MySQL 并回写缓存，没抢到锁的请求短暂轮询缓存，轮询失败后才降级查库。Feed 批量实体查询用本地缓存、Redis MGet、MySQL，并用 singleflight 合并同一视频 ID 的并发查库。
 
 ### 21.3 MQ 重复消费怎么办？
 
@@ -1863,7 +1872,7 @@ VUS=20 且无 sleep，不是 20 QPS，而是 20 个虚拟用户疯狂循环
 
 ```text
 GetVideosByIDs: L1 本地缓存 -> L2 Redis MGet -> L3 MySQL
-GetDetail: Redis 缓存 + 分布式锁防击穿
+GetDetail: Redis 缓存 + singleflight + 分布式锁防击穿
 ListLatest: Redis ZSet 热数据 + MySQL 冷数据
 ListByPopularity: 60 个分钟 ZSet 合并小时榜
 ```
@@ -1954,4 +1963,3 @@ Redis/RabbitMQ 故障降级
 ```
 
 只要这些能讲清楚，这个项目就不是普通 CRUD，而是一个有工程化思考的后端项目。
-
